@@ -1,0 +1,1075 @@
+// Travel Workflow — Database Schema
+// Run: npx prisma db push
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  OPERATIVE
+  AGENT
+  CLIENT
+}
+
+enum TravelerType {
+  COUPLE
+  FAMILY
+  SOLO
+  FRIENDS
+  MICE
+  PLUS_60
+  HONEYMOON
+}
+
+enum TripTier {
+  BUDGET
+  STANDARD
+  CHARME
+  LUXURY
+}
+
+enum Season {
+  BAJA
+  MEDIA
+  ALTA
+}
+
+enum BookingStatus {
+  DRAFT
+  QUOTED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum SupplierOrderStatus {
+  PENDING
+  REQUESTED
+  CONFIRMED
+  PAID
+  CANCELLED
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  OVERDUE
+}
+
+enum TaskType {
+  BOOK_FLIGHT
+  BOOK_HOTEL
+  BOOK_GUIDE
+  BOOK_TRANSPORT
+  CONFIRM_SUPPLIER
+  CLIENT_CHECKIN
+  SUPPLIER_FOLLOWUP
+  SEND_ROADBOOK
+  COLLECT_FEEDBACK
+  CUSTOM
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  DISCOVERY_DONE
+  QUOTED
+  NEGOTIATING
+  WON
+  LOST
+}
+
+enum QuestionType {
+  SINGLE_SELECT
+  MULTI_SELECT
+  TEXT
+  NUMBER
+  DATE
+  BOOLEAN
+}
+
+enum ExperienceStyle {
+  ACTIVE
+  CONTEMPLATIVE
+  CULTURAL
+  GASTRONOMIC
+  NATURE
+  ADVENTURE
+  RELAXATION
+}
+
+enum DifficultyLevel {
+  EASY
+  MODERATE
+  CHALLENGING
+  DEMANDING
+  EXTREME
+}
+
+enum TransportMode {
+  PRIVATE_CAR
+  MINIVAN
+  BUS
+  FLIGHT
+  BOAT
+  FOUR_BY_FOUR
+  JEEP_WILLYS
+  HORSE
+  WALKING
+  CANOE
+}
+
+enum TipCategory {
+  RESTAURANT
+  CAFE
+  BAR
+  NIGHTLIFE
+  MARKET
+  MUSEUM
+  VIEWPOINT
+  PARK
+  BEACH
+  FESTIVAL
+  SHOPPING
+  FREE_ACTIVITY
+  WALKING_ROUTE
+  POINT_OF_INTEREST
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  name           String
+  role           UserRole  @default(OPERATIVE)
+  language       String    @default("fr") // fr, en, es, de
+  phone          String?
+  avatarUrl      String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  assignedTasks  OpsTask[]     @relation("TaskAssignee")
+  createdQuotes  Quote[]       @relation("QuoteCreator")
+  managedBookings Booking[]    @relation("BookingOperative")
+
+  @@map("users")
+}
+
+// ============================================================
+// DESTINATIONS & GEOGRAPHY
+// ============================================================
+
+model Destination {
+  id                 String    @id @default(uuid())
+  name               String    // e.g. "Bogotá", "Salento", "Cartagena"
+  region             String    // e.g. "Cundinamarca", "Quindío", "Bolívar"
+  country            String    @default("Colombia")
+  description        Json?     // { fr: "...", en: "...", es: "..." }
+  altitudeMeters     Int?      // e.g. 2600 for Bogotá
+  climateNotes       Json?     // { fr: "...", en: "...", es: "..." }
+  avgTempMin         Int?      // in Celsius
+  avgTempMax         Int?      // in Celsius
+  languagesAvailable String[]  // ["fr", "en", "es", "de"]
+  rentalAvailable    Boolean   @default(false)
+  trekkingAvailable  Boolean   @default(false)
+  photoGallery       String[]  // array of Supabase Storage URLs
+  latitude           Float?
+  longitude          Float?
+  isActive           Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  accommodations     Accommodation[]
+  experiences        Experience[]
+  transportOrigins   TransportRoute[]  @relation("TransportOrigin")
+  transportDestinations TransportRoute[] @relation("TransportDestination")
+  tips               DestinationTip[]
+  safety             DestinationSafety?
+  templateDays       TemplateDay[]
+  bookingStages      BookingStage[]
+  quoteItems         QuoteItem[]
+
+  @@map("destinations")
+}
+
+model DestinationSafety {
+  id                  String   @id @default(uuid())
+  destinationId       String   @unique
+  healthWarnings      Json?    // { fr: "...", en: "...", es: "..." }
+  altitudeInfo        Json?
+  vaccinationRecs     Json?
+  waterSafety         Json?
+  insectRisks         Json?
+  hospitals           Json?    // [{ name, address, phone, latitude, longitude }]
+  pharmacies          Json?
+  emergencyPolice     String?  @default("123")
+  emergencyFire       String?  @default("119")
+  emergencyMedical    String?  @default("125")
+  embassyContacts     Json?    // { FR: { phone, address }, US: {...}, DE: {...} }
+  generalSafetyNotes  Json?
+  transportSafety     Json?
+  updatedAt           DateTime @updatedAt
+
+  destination         Destination @relation(fields: [destinationId], references: [id])
+
+  @@map("destination_safety")
+}
+
+model DestinationTip {
+  id               String       @id @default(uuid())
+  destinationId    String
+  name             String       // e.g. "Café Zorba"
+  category         TipCategory
+  description      Json?        // { fr: "...", en: "...", es: "..." }
+  address          String?
+  phone            String?
+  website          String?
+  latitude         Float?
+  longitude        Float?
+  priceRange       String?      // e.g. "30,000-50,000 COP"
+  openingHours     String?
+  walkingDistance   Boolean      @default(false) // from common hotels
+  tags             String[]     // ["vegetarian", "local", "rooftop"]
+  photoUrl         String?
+  isActive         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+
+  destination      Destination  @relation(fields: [destinationId], references: [id])
+  roadbookTips     RoadbookTip[]
+
+  @@map("destination_tips")
+}
+
+// ============================================================
+// SUPPLIERS: ACCOMMODATIONS, EXPERIENCES, TRANSPORT
+// ============================================================
+
+model Accommodation {
+  id               String    @id @default(uuid())
+  destinationId    String
+  name             String    // e.g. "Hotel Dix", "Masaya Bogotá"
+  type             String    // hotel, hostel, ecolodge, hacienda, glamping, boutique, villa
+  tier             TripTier  @default(STANDARD)
+  maxCapacity      Int?      // max guests at the property
+  description      Json?     // { fr: "...", en: "...", es: "..." }
+  address          String?
+  phone            String?
+  email            String?
+  website          String?
+  latitude         Float?
+  longitude        Float?
+  checkInTime      String?   @default("15:00")
+  checkOutTime     String?   @default("11:00")
+  amenities        String[]  // ["pool", "wifi", "ac", "parking", "restaurant", "spa"]
+  roomTypes        Json?     // [{ name: "Standard Double", maxGuests: 2, bedType: "double" }]
+  photoGallery     String[]
+  rating           Float?    // internal rating 1-5
+  stars            Int?      // official star rating
+  notes            String?   // internal notes
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  destination      Destination    @relation(fields: [destinationId], references: [id])
+  contracts        Contract[]     @relation("AccommodationContracts")
+  dayItems         DayItem[]      @relation("DayItemAccommodation")
+  quoteItems       QuoteItem[]    @relation("QuoteItemAccommodation")
+  stageServices    StageService[] @relation("StageServiceAccommodation")
+
+  @@map("accommodations")
+}
+
+model Experience {
+  id                String          @id @default(uuid())
+  destinationId     String
+  name              String          // e.g. "Bogotá City Tour", "Coffee Farm Visit"
+  category          String          // city_tour, nature, cultural, gastronomic, adventure, wellness
+  activityStyle     ExperienceStyle @default(CULTURAL)
+  durationMinutes   Int?
+  difficulty        DifficultyLevel @default(EASY)
+  description       Json?           // { fr: "...", en: "...", es: "..." }
+  highlights        Json?           // { fr: ["..."], en: ["..."] }
+  included          Json?           // { fr: ["..."], en: ["..."] }
+  notIncluded       Json?
+  whatToBring       Json?
+  languages         String[]        // ["fr", "en", "es"]
+  transportIncluded TransportMode?  // if transport is part of the experience
+  minPax            Int?            @default(1)
+  maxPax            Int?
+  meetingPoint      String?
+  contactName       String?
+  contactPhone      String?
+  contactEmail      String?
+  photoGallery      String[]
+  notes             String?         // internal notes
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  destination       Destination    @relation(fields: [destinationId], references: [id])
+  contracts         Contract[]     @relation("ExperienceContracts")
+  dayItems          DayItem[]      @relation("DayItemExperience")
+  quoteItems        QuoteItem[]    @relation("QuoteItemExperience")
+  stageServices     StageService[] @relation("StageServiceExperience")
+
+  @@map("experiences")
+}
+
+model TransportRoute {
+  id               String        @id @default(uuid())
+  originId         String
+  destinationId    String
+  mode             TransportMode
+  provider         String?       // e.g. "Avianca", "Localiza", "Pure Colombia"
+  vehicleType      String?       // e.g. "Minivan", "4x4", "Speedboat"
+  capacity         Int?
+  distanceKm       Int?
+  durationMinutes  Int?
+  altitudeStart    Int?          // meters ASL
+  altitudeEnd      Int?
+  routeNotes       Json?         // { fr: "...", en: "..." }
+  contactName      String?
+  contactPhone     String?
+  contactEmail     String?
+  isActive         Boolean       @default(true)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  origin           Destination    @relation("TransportOrigin", fields: [originId], references: [id])
+  destination      Destination    @relation("TransportDestination", fields: [destinationId], references: [id])
+  contracts        Contract[]     @relation("TransportContracts")
+  dayItems         DayItem[]      @relation("DayItemTransport")
+  quoteItems       QuoteItem[]    @relation("QuoteItemTransport")
+  stageServices    StageService[] @relation("StageServiceTransport")
+
+  @@map("transport_routes")
+}
+
+// ============================================================
+// CONTRACTS (CONFIDENTIAL — SUPER_ADMIN ONLY)
+// ============================================================
+
+model Contract {
+  id              String    @id @default(uuid())
+  supplierType    String    // "accommodation", "experience", "transport"
+  accommodationId String?
+  experienceId    String?
+  transportId     String?
+  season          Season    @default(BAJA)
+  netCostCop      Int       // Net cost in COP (integer, no decimals)
+  costPerWhat     String    // "per_night", "per_person", "per_group", "per_vehicle"
+  currency        String    @default("COP")
+  negotiatedPerks Json?     // [{ description: "Free night after 3", conditions: "..." }]
+  conditions      Json?     // { cancellation: "...", payment: "30% deposit", ... }
+  commissionPct   Float?    // commission percentage if applicable
+  validFrom       DateTime
+  validTo         DateTime
+  notes           String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  accommodation   Accommodation? @relation("AccommodationContracts", fields: [accommodationId], references: [id])
+  experience      Experience?    @relation("ExperienceContracts", fields: [experienceId], references: [id])
+  transport       TransportRoute? @relation("TransportContracts", fields: [transportId], references: [id])
+
+  @@map("contracts")
+}
+
+// ============================================================
+// TRIP TEMPLATES
+// ============================================================
+
+model TripTemplate {
+  id               String         @id @default(uuid())
+  name             String         // e.g. "Classic Colombia 14D", "Off-the-beaten-path 16D"
+  slug             String         @unique
+  travelerTypes    TravelerType[]
+  tier             TripTier       @default(STANDARD)
+  durationDays     Int
+  description      Json?          // { fr: "...", en: "...", es: "..." }
+  highlights       Json?          // { fr: ["..."], en: ["..."] }
+  included         Json?
+  notIncluded      Json?
+  whatToBring      Json?
+  /// Whole units in clientCurrency (e.g. 2799 EUR, not cents)
+  basePriceAmount  Int?
+  /// Client-facing quote currency (EUR default; COP only when needed)
+  clientCurrency   String         @default("EUR")
+  /// Public product page on colombiesurmesure.com (or other)
+  webProductUrl    String?
+  tags             String[]       @default([])
+  photoUrl         String?
+  isPublished      Boolean        @default(false)
+  isActive         Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  days             TemplateDay[]
+  quotes           Quote[]
+
+  @@map("trip_templates")
+}
+
+model TemplateDay {
+  id              String   @id @default(uuid())
+  templateId      String
+  dayNumber       Int
+  destinationId   String
+  title           Json?    // { fr: "Bogotá — Visite de la ville", en: "..." }
+  description     Json?    // { fr: "...", en: "..." }
+  notes           String?  // internal notes
+
+  template        TripTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  destination     Destination  @relation(fields: [destinationId], references: [id])
+  items           DayItem[]
+
+  @@unique([templateId, dayNumber])
+  @@map("template_days")
+}
+
+model DayItem {
+  id               String    @id @default(uuid())
+  templateDayId    String
+  sortOrder        Int       @default(0)
+  itemType         String    // "accommodation", "experience", "transport", "meal", "free_time"
+  accommodationId  String?
+  experienceId     String?
+  transportId      String?
+  timeSlot         String?   // "morning", "afternoon", "evening", "full_day"
+  startTime        String?   // "08:00"
+  notes            Json?     // { fr: "...", en: "..." }
+  isOptional       Boolean   @default(false)
+
+  templateDay      TemplateDay     @relation(fields: [templateDayId], references: [id], onDelete: Cascade)
+  accommodation    Accommodation?  @relation("DayItemAccommodation", fields: [accommodationId], references: [id])
+  experience       Experience?     @relation("DayItemExperience", fields: [experienceId], references: [id])
+  transport        TransportRoute? @relation("DayItemTransport", fields: [transportId], references: [id])
+
+  @@map("day_items")
+}
+
+// ============================================================
+// CRM: CLIENTS, LEADS, DISCOVERY, QUOTES
+// ============================================================
+
+enum IntakeTokenStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+}
+
+enum ClientDocumentType {
+  PASSPORT
+  INSURANCE
+  VACCINATION
+  FLIGHT_INFO
+  SPECIAL_REQUIREMENTS
+  QUOTATION
+  OTHER
+}
+
+model Client {
+  id              String       @id @default(uuid())
+  name            String
+  email           String?      @unique
+  phone           String?
+  /// Primary language for communications, roadbook, emails (DB column: `language`).
+  preferredLanguage String     @default("fr") @map("language")
+  /// Languages the client can communicate in (e.g. fr, en).
+  spokenLanguages   String[] @default([])
+  /// Preferred language for guides/hosts on the trip (subset of spokenLanguages).
+  guideLanguage     String?
+  nationality     String?
+  travelerType    TravelerType?
+  tier            TripTier?
+  leadStatus      LeadStatus   @default(NEW)
+  source          String?      // "website", "agency", "referral", "social"
+  agencyName      String?      // if B2B, the referring agency
+  notes           String?
+  marketingOptOut Boolean      @default(false) // drip / nurture emails
+  /// Public token for /operational/[token] (pre-booking operational questionnaire).
+  operationalFormToken String? @unique @default(uuid())
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  preferences     ClientPreference[]
+  quotes          Quote[]
+  bookings        Booking[]
+  touchpoints     ClientTouchpoint[]
+  intakeTokens    IntakeToken[]
+  intakeResponses IntakeResponse[]
+  emailLogs       EmailLog[]
+  dripSequences   DripSequence[]
+  documents       ClientDocument[]
+  flights         ClientFlight[]
+  operationalDetails ClientOperationalDetails?
+  aiProposalDraft  AiProposalDraft?
+  aiProposals      AiProposal[]
+
+  @@map("clients")
+}
+
+model AiProposalDraft {
+  id          String   @id @default(uuid())
+  clientId    String   @unique
+  draftText   String   @default("")
+  updatedById String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("ai_proposal_drafts")
+}
+
+model AiProposal {
+  id            String   @id @default(uuid())
+  clientId      String
+  briefDraft    String?
+  generatedJson Json
+  editedJson    Json?
+  status        String   @default("draft") // draft, accepted, rejected, used_for_quote
+  createdById   String?
+  createdBy     String?
+  updatedById   String?
+  updatedBy     String?
+  acceptedAt    DateTime?
+  rejectedAt    DateTime?
+  usedForQuoteAt DateTime?
+  quoteId       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, createdAt])
+  @@map("ai_proposals")
+}
+
+model ClientOperationalDetails {
+  id                       String   @id @default(uuid())
+  clientId                 String   @unique
+  numAdults                Int?
+  numChildren              Int?
+  childrenAges             String?
+  roomComposition          String?
+  numRooms                 Int?
+  passportNames            Json?
+  medicalNotes             String?
+  mobilityNotes            String?
+  arrivalInfo              String?
+  departureInfo            String?
+  specialRequests          String?
+  travelInsurance          String?
+  emergencyContactName     String?
+  emergencyContactPhone    String?
+  emergencyContactRelation String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("client_operational_details")
+}
+
+/// Client file or note (e.g. passport scan URL, or notes-only for special_requirements).
+model ClientDocument {
+  id        String             @id @default(uuid())
+  clientId  String
+  /// When set, links this row to a quote (e.g. PDF / print URL on the client file).
+  quoteId   String?            @unique
+  type      ClientDocumentType
+  title     String?
+  fileUrl   String? // optional — agents may store notes only for SPECIAL_REQUIREMENTS
+  notes     String?
+  expiryDate DateTime?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  quote  Quote? @relation("QuoteClientDocument", fields: [quoteId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@map("client_documents")
+}
+
+/// International flights (client-booked) — used for airport transfers coordination.
+model ClientFlight {
+  id            String   @id @default(uuid())
+  clientId      String
+  bookingId     String?
+  direction     String // "arrival" | "departure"
+  airline       String
+  flightNumber  String
+  date          DateTime
+  departureCity String
+  arrivalCity   String
+  departureTime String
+  arrivalTime   String
+  terminal      String?
+  bookingRef    String?
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  client  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([bookingId])
+  @@map("client_flights")
+}
+
+/// Shareable questionnaire link; `token` is the public UUID in /intake/[token]
+model IntakeToken {
+  id               String            @id @default(uuid())
+  clientId         String
+  token            String            @unique
+  status           IntakeTokenStatus @default(PENDING)
+  currentStep      Int               @default(1)
+  partialData      Json              @default("{}")
+  reminderCount    Int               @default(0)
+  lastReminderAt   DateTime?
+  createdAt        DateTime          @default(now())
+  expiresAt        DateTime
+  completedAt      DateTime?
+
+  client   Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  response IntakeResponse?
+
+  @@index([token])
+  @@index([clientId])
+  @@index([status, expiresAt])
+  @@map("intake_tokens")
+}
+
+model IntakeResponse {
+  id              String   @id @default(uuid())
+  tokenId         String   @unique
+  clientId        String
+  step1Data       Json?
+  step2Data       Json?
+  step3Data       Json?
+  step4Data       Json?
+  step5Data       Json?
+  step6Data       Json?
+  step7Data       Json?
+  fullResponse    Json?
+  marketingOptIn  Boolean  @default(true)
+  submittedAt     DateTime @default(now())
+
+  token  IntakeToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  client Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  dripSequences DripSequence[]
+
+  @@map("intake_responses")
+}
+
+model EmailLog {
+  id         String    @id @default(uuid())
+  clientId   String
+  template   String
+  subject    String?
+  resendId   String?
+  sentAt     DateTime  @default(now())
+  openedAt   DateTime?
+  clickedAt  DateTime?
+  status     String    @default("sent")
+  metadata   Json      @default("{}")
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([template])
+  @@map("email_log")
+}
+
+model DripSequence {
+  id                 String    @id @default(uuid())
+  clientId           String
+  intakeResponseId   String?
+  sequenceName       String    @default("post_intake")
+  currentStep        Int       @default(0)
+  nextSendAt         DateTime?
+  isActive           Boolean   @default(true)
+  startedAt          DateTime  @default(now())
+  completedAt        DateTime?
+
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  intakeResponse IntakeResponse? @relation(fields: [intakeResponseId], references: [id], onDelete: SetNull)
+
+  @@index([isActive, nextSendAt])
+  @@map("drip_sequences")
+}
+
+model ClientPreference {
+  id           String       @id @default(uuid())
+  clientId     String
+  questionKey  String       // e.g. "travel_pace", "morning_person", "room_preference"
+  answerValue  String       // the selected answer
+  answerJson   Json?        // for multi-select or complex answers
+  notes        String?
+  /// Internal note from an agent about this discovery answer (intake field).
+  agentNote    String?
+  agentNoteBy  String?
+  agentNoteAt  DateTime?
+  createdAt    DateTime     @default(now())
+
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, questionKey])
+  @@map("client_preferences")
+}
+
+model ClientTouchpoint {
+  id            String   @id @default(uuid())
+  clientId      String
+  bookingId     String?
+
+  channel       String // "call", "whatsapp", "email_sent", "email_received", "sms", "meeting", "video_call", "social_media", "website_visit", "internal", ...
+  category      String // "discovery", "follow_up", "quotation", "booking_confirmation", "operational", "support", "feedback", "marketing"
+  direction     String   @default("outbound") // "outbound", "inbound", "internal"
+
+  subject       String?
+  summary       String?
+  outcome       String?
+
+  attachmentUrl String?
+  externalRef   String?
+
+  contentType   String?
+  contentName   String?
+
+  agentId       String?
+  agentName     String?
+  duration      Int?
+  touchpointAt  DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  client  Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([touchpointAt])
+  @@map("client_touchpoints")
+}
+
+model Quote {
+  id              String        @id @default(uuid())
+  clientId        String
+  templateId      String?       // optional: based on a template
+  createdById     String
+  name            String?       // e.g. "Classic Colombia — Famille Fabre"
+  status          String        @default("draft") // draft, sent, accepted, rejected, expired
+  durationDays    Int
+  numTravelers    Int           @default(2)
+  travelerType    TravelerType?
+  tier            TripTier?
+  totalPriceCop   Int?
+  totalPriceEur   Int?          // if selling in EUR
+  marginPct       Float?        @default(20)
+  currency        String        @default("EUR")
+  validUntil      DateTime?
+  /// Reference travel window for contract season matching and print.
+  travelStartDate DateTime?
+  travelEndDate   DateTime?
+  rejectionReason String?
+  /// Copied from template or edited for client PDF.
+  included        Json?
+  notIncluded     Json?
+  notes           String?
+  customizations  Json?         // freeform customization notes
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  client          Client       @relation(fields: [clientId], references: [id])
+  template        TripTemplate? @relation(fields: [templateId], references: [id])
+  createdBy       User         @relation("QuoteCreator", fields: [createdById], references: [id])
+  booking         Booking?
+  items           QuoteItem[]
+  quotationDocument ClientDocument? @relation("QuoteClientDocument")
+
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id           String   @id @default(uuid())
+  quoteId      String
+  dayNumber    Int
+  sortOrder    Int      @default(0)
+  destinationId String
+  itemType     String   // accommodation, experience, transport, meal, free_time
+  accommodationId  String?
+  experienceId     String?
+  transportId      String?
+  timeSlot         String?
+  startTime        String?
+  notes            Json?
+  isOptional       Boolean  @default(false)
+  /// Display label (meal/free_time or fallback).
+  description  String   @default("")
+  /// Net unit cost in COP from active contract (nullable = no contract / manual).
+  netUnitCop   Int?
+  costPerWhat  String?  // per_night, per_person, per_group, per_vehicle
+  quantity     Int      @default(1)
+  /// Cached line net in COP.
+  subtotalNetCop  Int?
+  /// Manual line total in client quote currency (whole units) when no contract or override.
+  manualLineTotalClient Int?
+  isManualPricing Boolean @default(false)
+
+  quote        Quote         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  destination  Destination   @relation(fields: [destinationId], references: [id])
+  accommodation Accommodation? @relation("QuoteItemAccommodation", fields: [accommodationId], references: [id])
+  experience    Experience?    @relation("QuoteItemExperience", fields: [experienceId], references: [id])
+  transport     TransportRoute? @relation("QuoteItemTransport", fields: [transportId], references: [id])
+
+  @@index([quoteId, dayNumber])
+  @@map("quote_items")
+}
+
+// ============================================================
+// BOOKINGS & OPERATIONS
+// ============================================================
+
+model Booking {
+  id                String        @id @default(uuid())
+  quoteId           String?       @unique
+  clientId          String
+  operativeId       String?       // assigned operative for daily follow-up
+  dossierNumber     String        @unique // e.g. "CSM-2025-0042"
+  status            BookingStatus @default(DRAFT)
+  travelStart       DateTime
+  travelEnd         DateTime
+  numTravelers      Int
+  totalPaidCop      Int           @default(0)
+  totalPriceCop     Int
+  currency          String        @default("EUR")
+  notes             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  quote             Quote?        @relation(fields: [quoteId], references: [id])
+  client            Client        @relation(fields: [clientId], references: [id])
+  operative         User?         @relation("BookingOperative", fields: [operativeId], references: [id])
+  stages            BookingStage[]
+  supplierOrders    SupplierOrder[]
+  tasks             OpsTask[]
+  roadbook          Roadbook?
+  feedback          Feedback[]
+  emergencyContacts EmergencyContact[]
+  payments          Payment[]
+  clientFlights     ClientFlight[]
+  touchpoints       ClientTouchpoint[]
+
+  @@map("bookings")
+}
+
+model BookingStage {
+  id              String   @id @default(uuid())
+  bookingId       String
+  destinationId   String
+  stageOrder      Int
+  dateStart       DateTime
+  dateEnd         DateTime
+  notes           String?  // internal operational notes
+  clientNotes     Json?    // { fr: "...", en: "..." } — shown in roadbook
+
+  booking         Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  destination     Destination  @relation(fields: [destinationId], references: [id])
+  services        StageService[]
+  roadbookStage   RoadbookStage?
+
+  @@unique([bookingId, stageOrder])
+  @@map("booking_stages")
+}
+
+model StageService {
+  id               String             @id @default(uuid())
+  stageId          String
+  serviceType      String             // "accommodation", "experience", "transport", "meal", "flight"
+  accommodationId  String?
+  experienceId     String?
+  transportId      String?
+  status           SupplierOrderStatus @default(PENDING)
+  serviceDate      DateTime?
+  serviceTime      String?            // "08:30"
+  meetingPoint     String?
+  contactName      String?
+  contactPhone     String?
+  confirmationRef  String?            // booking/reservation reference
+  details          Json?              // { fr: "...", en: "..." }
+  internalNotes    String?
+  sortOrder        Int                @default(0)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  stage            BookingStage    @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  accommodation    Accommodation?  @relation("StageServiceAccommodation", fields: [accommodationId], references: [id])
+  experience       Experience?     @relation("StageServiceExperience", fields: [experienceId], references: [id])
+  transport        TransportRoute? @relation("StageServiceTransport", fields: [transportId], references: [id])
+
+  @@map("stage_services")
+}
+
+model SupplierOrder {
+  id              String              @id @default(uuid())
+  bookingId       String
+  supplierType    String              // "hotel", "guide", "transport", "flight", "activity"
+  supplierName    String
+  status          SupplierOrderStatus @default(PENDING)
+  orderDetails    String?
+  confirmationRef String?
+  costCop         Int?
+  paidCop         Int?                @default(0)
+  invoiceNumber   String?
+  dueDate         DateTime?
+  notes           String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  booking         Booking             @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("supplier_orders")
+}
+
+model OpsTask {
+  id           String     @id @default(uuid())
+  bookingId    String?
+  assigneeId   String?
+  taskType     TaskType
+  title        String
+  description  String?
+  dueDate      DateTime
+  status       TaskStatus @default(PENDING)
+  priority     Int        @default(0) // 0=normal, 1=high, 2=urgent
+  completedAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  booking      Booking?   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  assignee     User?      @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  @@map("ops_tasks")
+}
+
+model Payment {
+  id           String   @id @default(uuid())
+  bookingId    String
+  amountCop    Int
+  currency     String   @default("COP")
+  method       String?  // "transfer", "card", "cash", "payU"
+  reference    String?
+  paidAt       DateTime
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  booking      Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// ============================================================
+// ROADBOOK / CARNET DE VOYAGE
+// ============================================================
+
+model Roadbook {
+  id                  String    @id @default(uuid())
+  bookingId           String    @unique
+  shareToken          String    @unique @default(uuid()) // public access token
+  language            String    @default("fr")
+  personalizationData Json?     // answers to discovery questions, formatted for display
+  insuranceDetails    String?
+  medicalNotes        String?
+  packingList         Json?     // { fr: ["..."], en: ["..."] }
+  generalInfo         Json?     // immigration, currency, phone tips
+  publishedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  booking             Booking          @relation(fields: [bookingId], references: [id])
+  stages              RoadbookStage[]
+  tips                RoadbookTip[]
+
+  @@map("roadbooks")
+}
+
+model RoadbookStage {
+  id                String   @id @default(uuid())
+  roadbookId        String
+  bookingStageId    String   @unique
+  clientFacingNotes Json?    // { fr: "...", en: "..." }
+  curatedTips       Json?    // curated subset of destination tips
+  safetyHighlights  Json?    // relevant safety info for this stage
+  restaurantRecs    Json?    // curated restaurant recommendations
+
+  roadbook          Roadbook     @relation(fields: [roadbookId], references: [id], onDelete: Cascade)
+  bookingStage      BookingStage @relation(fields: [bookingStageId], references: [id])
+
+  @@map("roadbook_stages")
+}
+
+model RoadbookTip {
+  id                String   @id @default(uuid())
+  roadbookId        String
+  destinationTipId  String
+  customNote        Json?    // { fr: "...", en: "..." } — personalized tip note
+  sortOrder         Int      @default(0)
+
+  roadbook          Roadbook       @relation(fields: [roadbookId], references: [id], onDelete: Cascade)
+  destinationTip    DestinationTip @relation(fields: [destinationTipId], references: [id])
+
+  @@map("roadbook_tips")
+}
+
+model EmergencyContact {
+  id            String   @id @default(uuid())
+  bookingId     String
+  contactName   String
+  relationship  String   // "spouse", "parent", "sibling", "friend", "insurance"
+  phone         String
+  email         String?
+  isPrimary     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  booking       Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("emergency_contacts")
+}
+
+model Feedback {
+  id           String   @id @default(uuid())
+  bookingId    String
+  overallRating Int?    // 1-5
+  guideRating  Int?
+  hotelRating  Int?
+  comments     String?
+  highlights   String?  // what they loved most
+  improvements String?  // what could be better
+  submittedAt  DateTime @default(now())
+
+  booking      Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("feedback")
+}
