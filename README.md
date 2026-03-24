@@ -13,9 +13,10 @@ Full-stack operations platform for managing bespoke travel experiences with no s
 ## What This Is
 
 This web-based solution is a real business application built for operating travel brands or Destination Management Companies in the bespoke travel industry.  
-It manages the full operational lifecycle:
 
-**lead capture -> discovery -> quotation -> booking -> operations -> client roadbook -> Q&A**
+It manages full operational lifecycles:
+
+**lead capture -> discovery -> quotation -> bookings & inventory -> operations -> client roadbook -> Q&A**
 
 It also integrates Claude API to automatically generate personalized travel documentation based on real client context, backend data, and rules.
 
