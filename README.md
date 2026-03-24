@@ -111,8 +111,10 @@ I built this in iterative product phases, validating each operational step again
 
 ## Status
 
-Active development — Phases 1-7 of 11 complete. Built in collaboration with AI-assisted development (Cursor + Claude).
+Active development - Phases 1-7 of 11 complete. Built in collaboration with AI-assisted development (Cursor + ClaudeCode) 
+
+Currently documenting all dev processes to build self-paced learning materials to enhance my understanding of the technical aspects behind it.
 
 ## Author
 
-**B.A. Ramirez** — Travel industry professional now evolving in IT and building tech solutions that save time and money.
+**B.A. Ramirez** - Travel industry professional now evolving in IT and building tech solutions that save time and money.
