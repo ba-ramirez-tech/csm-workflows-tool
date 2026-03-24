@@ -12,7 +12,7 @@ Full-stack operations platform for managing bespoke travel experiences with no s
 
 ## What This Is
 
-Travel Workflow is a real business application built for an operating travel company or Destination Management Company in bespoke travel.  
+This web-based solution is a real business application built for operating travel brands or Destination Management Companies in the bespoke travel industry.  
 It manages the full operational lifecycle:
 
 **lead capture -> discovery -> quotation -> booking -> operations -> client roadbook -> Q&A**
