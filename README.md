@@ -37,7 +37,7 @@ It also integrates Claude API to automatically generate personalized travel docu
 - **Frontend**: Next.js 14 (App Router), React, TypeScript, Tailwind CSS
 - **Database**: PostgreSQL via Supabase
 - **ORM**: Prisma (30+ models)
-- **AI**: Anthropic Claude API for proposal generation
+- **AI**: Anthropic Claude API for proposals' time optimization
 - **Auth**: Supabase Auth (role-based)
 - **Deployment**: Vercel-ready
 
