@@ -12,12 +12,12 @@ Full-stack operations platform for managing bespoke travel experiences with no s
 
 ## What This Is
 
-Travel Workflow is a real business application built for an operating travel company, not a tutorial app.  
+Travel Workflow is a real business application built for an operating travel company or Destination Management Company in bespoke travel.  
 It manages the full operational lifecycle:
 
 **lead capture -> discovery -> quotation -> booking -> operations -> client roadbook**
 
-It also integrates Claude AI to automatically generate personalized travel proposals based on real client context and backend data and rules.
+It also integrates Claude AI to automatically generate personalized travel proposals based on real client context, backend data, and rules.
 
 ## Key Features
 
@@ -114,4 +114,4 @@ Active development — Phases 1-7 of 11 complete. Built in collaboration with AI
 
 ## Author
 
-**B.A. Ramirez** — Travel industry professional building tech solutions that save time and money.
+**B.A. Ramirez** — Travel industry professional now evolving in IT and building tech solutions that save time and money.
