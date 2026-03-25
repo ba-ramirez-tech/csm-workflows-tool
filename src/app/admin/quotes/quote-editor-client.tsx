@@ -4,15 +4,7 @@ import { useCallback, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { TravelerType, TripTier } from "@prisma/client";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  Plus,
-  Printer,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Printer, Save } from "lucide-react";
 import {
   cloneQuoteAction,
   convertQuoteToBookingAction,
@@ -32,6 +24,7 @@ import {
 } from "@/lib/quote-display";
 import { clientAmountToCop } from "@/lib/exchange-rates";
 import { formatClientPrice } from "@/lib/client-currency";
+import { QuoteEditorDaysSection, type AccommodationPick } from "./quote-editor-days-section";
 
 export type QuoteItemState = {
   /** Persisted row id — matches itemsWithRelations after save/refresh. */
@@ -52,8 +45,15 @@ export type QuoteItemState = {
 };
 
 export type QuoteDayState = {
+  rowKey: string;
+  dayDetailId?: string | null;
   dayNumber: number;
   destinationId: string;
+  title: string;
+  tags: string[];
+  clientDescription: string;
+  agentNotes: string;
+  transportEntries: { type: string; route: string; duration: string; tip: string; notes: string }[];
   items: QuoteItemState[];
 };
 
@@ -86,15 +86,9 @@ type Props = {
   experiencesByDest: Record<string, { id: string; name: string }[]>;
   transports: TransportOpt[];
   transportLabels: Record<string, string>;
+  accommodationPicker: AccommodationPick[];
+  linkedAiProposal?: { proposalName: string } | null;
 };
-
-const ITEM_TYPES = [
-  { value: "accommodation", label: "Accommodation" },
-  { value: "experience", label: "Experience" },
-  { value: "transport", label: "Transport" },
-  { value: "meal", label: "Meal" },
-  { value: "free_time", label: "Free time" },
-] as const;
 
 const TRAVELERS: TravelerType[] = [
   "COUPLE",
@@ -111,37 +105,27 @@ function newKey() {
   return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `k-${Date.now()}`;
 }
 
-function emptyItem(sortOrder: number): QuoteItemState {
+function normalizeDay(d: QuoteDayState | (Partial<QuoteDayState> & { dayNumber: number; destinationId: string; items: QuoteItemState[] })): QuoteDayState {
+  const base = d as QuoteDayState;
   return {
-    serverId: null,
-    clientKey: newKey(),
-    sortOrder,
-    itemType: "accommodation",
-    accommodationId: null,
-    experienceId: null,
-    transportId: null,
-    timeSlot: "morning",
-    startTime: "",
-    notesText: "",
-    isOptional: false,
-    description: "",
-    isManualPricing: false,
-    manualLineTotalClient: null,
+    rowKey: base.rowKey ?? newKey(),
+    dayDetailId: base.dayDetailId ?? null,
+    dayNumber: base.dayNumber,
+    destinationId: base.destinationId,
+    title: base.title ?? "",
+    tags: base.tags ?? [],
+    clientDescription: base.clientDescription ?? "",
+    agentNotes: base.agentNotes ?? "",
+    transportEntries: base.transportEntries ?? [],
+    items: base.items,
   };
-}
-
-function filterTransportsForDay(transports: TransportOpt[], dayIndex: number, days: QuoteDayState[]): TransportOpt[] {
-  const cur = days[dayIndex]?.destinationId;
-  const prev = dayIndex > 0 ? days[dayIndex - 1]?.destinationId : null;
-  if (!cur) return [];
-  return transports.filter((t) => t.originId === cur || (prev != null && t.originId === prev));
 }
 
 export function QuoteEditorClient(props: Props) {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [meta, setMeta] = useState(props.initialMeta);
-  const [days, setDays] = useState(props.initialDays);
+  const [days, setDays] = useState(() => props.initialDays.map(normalizeDay));
   const [rejectReason, setRejectReason] = useState("");
   const [pending, startTransition] = useTransition();
 
@@ -193,12 +177,20 @@ export function QuoteEditorClient(props: Props) {
       tier: meta.tier,
       included: linesToIncludedJson(meta.includedText),
       notIncluded: linesToIncludedJson(meta.notIncludedText),
-      days: days.map((d) => ({
-        dayNumber: d.dayNumber,
+      days: days.map((d, idx) => ({
+        rowKey: d.rowKey,
+        dayDetailId: d.dayDetailId ?? null,
+        dayNumber: idx + 1,
         destinationId: d.destinationId,
-        items: d.items.map((it, idx) => ({
+        title: d.title,
+        tags: d.tags,
+        clientDescription: d.clientDescription,
+        agentNotes: d.agentNotes,
+        transportEntries: d.transportEntries,
+        sortOrder: idx,
+        items: d.items.map((it, itemIdx) => ({
           clientKey: it.clientKey,
-          sortOrder: it.sortOrder ?? idx,
+          sortOrder: it.sortOrder ?? itemIdx,
           itemType: it.itemType as QuoteEditorPayload["days"][0]["items"][0]["itemType"],
           accommodationId: it.accommodationId,
           experienceId: it.experienceId,
@@ -243,50 +235,26 @@ export function QuoteEditorClient(props: Props) {
     );
   };
 
-  const updateDayDest = (dayIdx: number, destinationId: string) => {
-    setDays((prev) => prev.map((d, i) => (i === dayIdx ? { ...d, destinationId } : d)));
-  };
-
-  const updateItem = (dayIdx: number, itemIdx: number, patch: Partial<QuoteItemState>) => {
-    setDays((prev) =>
-      prev.map((d, di) => {
-        if (di !== dayIdx) return d;
-        const items = d.items.map((it, ii) => (ii === itemIdx ? { ...it, ...patch } : it));
-        return { ...d, items };
-      }),
-    );
-  };
-
-  const addItem = (dayIdx: number) => {
-    setDays((prev) =>
-      prev.map((d, di) => {
-        if (di !== dayIdx) return d;
-        const next = [...d.items, emptyItem(d.items.length)];
-        return { ...d, items: next };
-      }),
-    );
-  };
-
-  const removeItem = (dayIdx: number, itemIdx: number) => {
-    setDays((prev) =>
-      prev.map((d, di) => {
-        if (di !== dayIdx) return d;
-        return { ...d, items: d.items.filter((_, ii) => ii !== itemIdx) };
-      }),
-    );
-  };
-
   const syncDuration = (n: number) => {
     setMeta((m) => ({ ...m, durationDays: n }));
     setDays((prev) => {
       const defaultDest = prev[0]?.destinationId || props.destinations[0]?.id || "";
       if (prev.length < n) {
-        const extra = Array.from({ length: n - prev.length }, (_, i) => ({
-          dayNumber: prev.length + i + 1,
-          destinationId: prev[prev.length - 1]?.destinationId || defaultDest,
-          items: [] as QuoteItemState[],
-        }));
-        return [...prev, ...extra];
+        const extra = Array.from({ length: n - prev.length }, (_, i) =>
+          normalizeDay({
+            rowKey: newKey(),
+            dayDetailId: null,
+            dayNumber: prev.length + i + 1,
+            destinationId: prev[prev.length - 1]?.destinationId || defaultDest,
+            title: "",
+            tags: [],
+            clientDescription: "",
+            agentNotes: "",
+            transportEntries: [],
+            items: [] as QuoteItemState[],
+          }),
+        );
+        return [...prev, ...extra].map((d, i) => ({ ...d, dayNumber: i + 1 }));
       }
       return prev.slice(0, n).map((d, i) => ({ ...d, dayNumber: i + 1 }));
     });
@@ -296,7 +264,7 @@ export function QuoteEditorClient(props: Props) {
     <div className="flex min-h-[calc(100vh-6rem)] gap-4">
       <aside
         className={[
-          "shrink-0 border-r border-slate-200 pr-4 transition-all dark:border-gray-700",
+          "sticky top-4 self-start shrink-0 border-r border-slate-200 pr-4 transition-all dark:border-gray-700",
           sidebarOpen ? "w-full max-w-sm" : "w-10",
         ].join(" ")}
       >
@@ -476,7 +444,7 @@ export function QuoteEditorClient(props: Props) {
                 className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-teal-300 bg-white px-3 py-2 text-sm font-medium text-teal-900 hover:bg-teal-100 disabled:opacity-50 dark:border-teal-800 dark:bg-gray-900 dark:text-teal-100 dark:hover:bg-teal-900/50"
               >
                 {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Recalculate
+                Recalculate all
               </button>
             </div>
           </div>
@@ -609,211 +577,27 @@ export function QuoteEditorClient(props: Props) {
           </div>
         </div>
 
-        <div className="space-y-8">
-          {days.map((day, dayIdx) => {
-            const destName = props.destinations.find((d) => d.id === day.destinationId)?.name ?? "Destination";
-            const dayItemsDb = itemsForTotals.filter((it) => it.dayNumber === day.dayNumber);
-            const daySellCop = dayItemsDb.reduce((acc, it) => acc + lineSellCop(it, marginPct, currency), 0);
+        {props.linkedAiProposal ? (
+          <div className="rounded-lg border border-teal-200 bg-teal-50/90 px-4 py-3 text-sm text-teal-950 dark:border-teal-900 dark:bg-teal-950/30 dark:text-teal-100">
+            Ce devis a été généré à partir de la proposition IA :{" "}
+            <strong>{props.linkedAiProposal.proposalName}</strong>. Tout est modifiable.
+          </div>
+        ) : null}
 
-            return (
-              <div
-                key={day.dayNumber}
-                className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900/40"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3 dark:border-gray-700">
-                  <div>
-                    <span className="text-xs font-semibold uppercase text-teal-700 dark:text-teal-400">
-                      Day {day.dayNumber}
-                    </span>
-                    <h3 className="text-lg font-semibold text-slate-900 dark:text-gray-100">{destName}</h3>
-                  </div>
-                  <select
-                    className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800"
-                    value={day.destinationId}
-                    onChange={(e) => updateDayDest(dayIdx, e.target.value)}
-                  >
-                    {props.destinations.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <ul className="mt-4 space-y-3">
-                  {day.items.map((it, itemIdx) => {
-                    const dbMatch = it.serverId
-                      ? itemsForTotals.find((row) => row.id === it.serverId)
-                      : undefined;
-                    const hasContract = dbMatch && dbMatch.subtotalNetCop != null && !it.isManualPricing;
-                    const noContract =
-                      (it.itemType === "accommodation" ||
-                        it.itemType === "experience" ||
-                        it.itemType === "transport") &&
-                      !it.isManualPricing &&
-                      !hasContract;
-
-                    return (
-                      <li
-                        key={it.clientKey}
-                        className="rounded-lg border border-slate-100 bg-slate-50/50 p-3 dark:border-gray-700 dark:bg-gray-800/50"
-                      >
-                        <div className="flex flex-wrap items-start gap-2">
-                          <select
-                            className="rounded border border-slate-300 text-xs dark:border-gray-600 dark:bg-gray-800"
-                            value={it.itemType}
-                            onChange={(e) =>
-                              updateItem(dayIdx, itemIdx, {
-                                itemType: e.target.value,
-                                accommodationId: null,
-                                experienceId: null,
-                                transportId: null,
-                              })
-                            }
-                          >
-                            {ITEM_TYPES.map((t) => (
-                              <option key={t.value} value={t.value}>
-                                {t.label}
-                              </option>
-                            ))}
-                          </select>
-                          {it.itemType === "accommodation" ? (
-                            <select
-                              className="min-w-[200px] flex-1 rounded border border-slate-300 text-sm dark:border-gray-600 dark:bg-gray-800"
-                              value={it.accommodationId ?? ""}
-                              onChange={(e) =>
-                                updateItem(dayIdx, itemIdx, { accommodationId: e.target.value || null })
-                              }
-                            >
-                              <option value="">Select hotel</option>
-                              {(props.accommodationsByDest[day.destinationId] ?? []).map((a) => (
-                                <option key={a.id} value={a.id}>
-                                  {a.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : null}
-                          {it.itemType === "experience" ? (
-                            <select
-                              className="min-w-[200px] flex-1 rounded border border-slate-300 text-sm dark:border-gray-600 dark:bg-gray-800"
-                              value={it.experienceId ?? ""}
-                              onChange={(e) =>
-                                updateItem(dayIdx, itemIdx, { experienceId: e.target.value || null })
-                              }
-                            >
-                              <option value="">Select experience</option>
-                              {(props.experiencesByDest[day.destinationId] ?? []).map((x) => (
-                                <option key={x.id} value={x.id}>
-                                  {x.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : null}
-                          {it.itemType === "transport" ? (
-                            <select
-                              className="min-w-[220px] flex-1 rounded border border-slate-300 text-sm dark:border-gray-600 dark:bg-gray-800"
-                              value={it.transportId ?? ""}
-                              onChange={(e) =>
-                                updateItem(dayIdx, itemIdx, { transportId: e.target.value || null })
-                              }
-                            >
-                              <option value="">Select route</option>
-                              {filterTransportsForDay(props.transports, dayIdx, days).map((t) => (
-                                <option key={t.id} value={t.id}>
-                                  {t.label}
-                                </option>
-                              ))}
-                            </select>
-                          ) : null}
-                          {(it.itemType === "meal" || it.itemType === "free_time") && (
-                            <input
-                              className="min-w-[160px] flex-1 rounded border border-slate-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800"
-                              placeholder="Label"
-                              value={it.description}
-                              onChange={(e) => updateItem(dayIdx, itemIdx, { description: e.target.value })}
-                            />
-                          )}
-                          <button
-                            type="button"
-                            className="ml-auto rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
-                            onClick={() => removeItem(dayIdx, itemIdx)}
-                            aria-label="Remove"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-
-                        <div className="mt-2 grid gap-2 text-sm md:grid-cols-2 lg:grid-cols-4">
-                          <label className="flex flex-col text-xs text-slate-600 dark:text-gray-400">
-                            Manual pricing
-                            <input
-                              type="checkbox"
-                              checked={it.isManualPricing}
-                              onChange={(e) =>
-                                updateItem(dayIdx, itemIdx, { isManualPricing: e.target.checked })
-                              }
-                            />
-                          </label>
-                          <label className="flex flex-col text-xs text-slate-600 dark:text-gray-400">
-                            Manual total ({currency})
-                            <input
-                              type="number"
-                              min={0}
-                              className="rounded border border-slate-300 px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
-                              value={it.manualLineTotalClient ?? ""}
-                              onChange={(e) =>
-                                updateItem(dayIdx, itemIdx, {
-                                  manualLineTotalClient: e.target.value === "" ? null : Number(e.target.value),
-                                })
-                              }
-                            />
-                          </label>
-                          <div className="text-xs text-slate-600 dark:text-gray-400">
-                            <div>Unit net (COP)</div>
-                            <div className="font-mono text-slate-900 dark:text-gray-100">
-                              {dbMatch?.netUnitCop != null ? dbMatch.netUnitCop.toLocaleString() : "—"}
-                            </div>
-                          </div>
-                          <div className="text-xs text-slate-600 dark:text-gray-400">
-                            <div>Line sell</div>
-                            <div className="font-medium text-slate-900 dark:text-gray-100">
-                              {dbMatch
-                                ? formatClientPrice(
-                                    copToClientAmount(lineSellCop(dbMatch, marginPct, currency), currency),
-                                    currency,
-                                  )
-                                : "—"}
-                            </div>
-                          </div>
-                        </div>
-
-                        {noContract ? (
-                          <p className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
-                            No contract — enter price manually (enable manual pricing or set amount).
-                          </p>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-
-                <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 dark:border-gray-700">
-                  <button
-                    type="button"
-                    onClick={() => addItem(dayIdx)}
-                    className="inline-flex items-center gap-1 text-sm font-medium text-teal-700 hover:text-teal-800 dark:text-teal-400"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add item
-                  </button>
-                  <span className="text-sm font-semibold text-slate-800 dark:text-gray-100">
-                    Day subtotal: {formatClientPrice(copToClientAmount(daySellCop, currency), currency)}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <QuoteEditorDaysSection
+          quoteId={props.quoteId}
+          days={days}
+          setDays={setDays}
+          marginPct={marginPct}
+          currency={currency}
+          itemsWithRelations={itemsForTotals}
+          quoteTier={meta.tier}
+          destinations={props.destinations}
+          accommodationsByDest={props.accommodationsByDest}
+          experiencesByDest={props.experiencesByDest}
+          transports={props.transports}
+          accommodationPicker={props.accommodationPicker}
+        />
       </div>
     </div>
   );

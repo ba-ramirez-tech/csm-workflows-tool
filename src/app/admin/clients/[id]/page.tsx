@@ -7,6 +7,7 @@ import { ClientOperationalSection } from "@/components/admin/client-operational-
 import { ClientOperationalTools } from "@/components/admin/client-operational-tools";
 import { ClientActivityTimeline } from "@/components/admin/client-activity-timeline";
 import { AiProposalModal } from "@/components/admin/ai-proposal-modal";
+import { ClientAiProposalsSection } from "@/components/admin/client-ai-proposals-section";
 import { DiscoveryProfileSection } from "@/components/admin/discovery-profile-section";
 import { DISCOVERY_INTAKE_FIELDS } from "@/lib/admin/discovery-intake-fields";
 import { ensureOperationalFormToken } from "@/lib/admin/client-operational";
@@ -14,6 +15,7 @@ import { getGuideLanguageGapsForClient, languageCodeLabel } from "@/lib/admin/gu
 import { clientDocumentTypeOptions } from "@/lib/admin/client-document-type-options";
 import { getPublicAppUrl } from "@/lib/email/client";
 import { getAnthropicApiKey } from "@/lib/ai/env";
+import { aiProposalItemSchema } from "@/lib/ai/proposal-response-schema";
 import { prisma } from "@/lib/prisma";
 
 const LANG_FLAG: Record<string, string> = {
@@ -112,6 +114,39 @@ export default async function ClientDetailPage({ params }: Props) {
   const documentTypeOptions = clientDocumentTypeOptions.map((o) => ({ value: o.value, label: o.label }));
   const aiConfigured = getAnthropicApiKey() != null;
 
+  const aiProposalRowsRaw = await prisma.aiProposal.findMany({
+    where: { clientId: id },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      proposalName: true,
+      tagline: true,
+      durationDays: true,
+      tier: true,
+      estimatedPriceRange: true,
+      quoteId: true,
+      createdAt: true,
+      fullResponse: true,
+    },
+  });
+
+  const initialAiProposals = aiProposalRowsRaw.map((r) => {
+    const parsed = aiProposalItemSchema.safeParse(r.fullResponse);
+    return {
+      id: r.id,
+      status: r.status,
+      proposalName: r.proposalName,
+      tagline: r.tagline,
+      durationDays: r.durationDays,
+      tier: r.tier,
+      estimatedPriceRange: r.estimatedPriceRange,
+      quoteId: r.quoteId,
+      createdAt: r.createdAt.toISOString(),
+      proposal: parsed.success ? parsed.data : null,
+    };
+  });
+
   return (
     <div className="space-y-8">
       <div>
@@ -204,6 +239,8 @@ export default async function ClientDetailPage({ params }: Props) {
           preferenceRows={discoveryPrefs}
         />
       </div>
+
+      <ClientAiProposalsSection clientId={client.id} initialRows={initialAiProposals} />
 
       {canShareOperational ? (
         <div id="operational-share">

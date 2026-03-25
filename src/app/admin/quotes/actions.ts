@@ -11,7 +11,7 @@ import { getPublicAppUrl } from "@/lib/email/client";
 import { logQuoteSent } from "@/lib/log-touchpoint";
 import { markAiProposalUsedForQuoteAction } from "@/app/admin/clients/ai-proposal-actions";
 import { prisma } from "@/lib/prisma";
-import { aiProposalItemSchema } from "@/lib/ai/proposal-response-schema";
+import { aiProposalItemSchema, formatAiEstimatedPriceRange } from "@/lib/ai/proposal-response-schema";
 import { resolveTemplateIdFromRecommended } from "@/lib/ai/resolve-template-from-ai";
 import { findContractForSupplier, lineQuantityForContract } from "@/lib/quote-contracts";
 import { createQuoteFormSchema, quoteEditorPayloadSchema } from "./quote-payload";
@@ -98,36 +98,47 @@ export async function createQuoteAction(_prev: ActionState, formData: FormData):
     });
     if (!dest) return { ok: false, message: "No destination in database — add one first." };
 
-    const quote = await prisma.quote.create({
-      data: {
-        clientId: v.clientId,
-        createdById: userId,
-        name: v.name,
-        durationDays: v.durationDays,
-        numTravelers: v.numTravelers,
-        travelerType: v.travelerType ?? undefined,
-        tier: v.tier ?? undefined,
-        currency: v.currency,
-        marginPct: 20,
-        travelStartDate: travelStart,
-        travelEndDate: travelEnd,
-        status: "draft",
-        items: {
-          create: [
-            {
-              dayNumber: 1,
-              sortOrder: 0,
-              destinationId: dest.id,
-              itemType: "free_time",
-              description: "Free time",
-              notes: Prisma.JsonNull,
-              quantity: 1,
-              isManualPricing: true,
-              manualLineTotalClient: 0,
-            },
-          ],
+    const quote = await prisma.$transaction(async (tx) => {
+      const q = await tx.quote.create({
+        data: {
+          clientId: v.clientId,
+          createdById: userId,
+          name: v.name,
+          durationDays: v.durationDays,
+          numTravelers: v.numTravelers,
+          travelerType: v.travelerType ?? undefined,
+          tier: v.tier ?? undefined,
+          currency: v.currency,
+          marginPct: 20,
+          travelStartDate: travelStart,
+          travelEndDate: travelEnd,
+          status: "draft",
         },
-      },
+      });
+      const dd = await tx.quoteDayDetail.create({
+        data: {
+          quoteId: q.id,
+          dayNumber: 1,
+          destinationId: dest.id,
+          sortOrder: 0,
+        },
+      });
+      await tx.quoteItem.create({
+        data: {
+          quoteId: q.id,
+          quoteDayDetailId: dd.id,
+          dayNumber: 1,
+          sortOrder: 0,
+          destinationId: dest.id,
+          itemType: "free_time",
+          description: "Free time",
+          notes: Prisma.JsonNull,
+          quantity: 1,
+          isManualPricing: true,
+          manualLineTotalClient: 0,
+        },
+      });
+      return q;
     });
     await recalculateQuoteTotals(quote.id);
     revalidatePath("/admin/quotes");
@@ -144,36 +155,6 @@ export async function createQuoteAction(_prev: ActionState, formData: FormData):
     },
   });
   if (!template) return { ok: false, message: "Template not found." };
-
-  const itemsData: Prisma.QuoteItemCreateManyInput[] = [];
-  for (const day of template.days) {
-    for (const it of day.items) {
-      const desc =
-        it.itemType === "meal" || it.itemType === "free_time"
-          ? it.itemType === "meal"
-            ? "Meal"
-            : "Free time"
-          : "";
-      itemsData.push({
-        quoteId: "", // filled below
-        dayNumber: day.dayNumber,
-        sortOrder: it.sortOrder,
-        destinationId: day.destinationId,
-        itemType: it.itemType,
-        accommodationId: it.accommodationId,
-        experienceId: it.experienceId,
-        transportId: it.transportId,
-        timeSlot: it.timeSlot,
-        startTime: it.startTime,
-        notes: it.notes ?? Prisma.JsonNull,
-        isOptional: it.isOptional,
-        description: desc,
-        quantity: 1,
-        isManualPricing: it.itemType === "meal" || it.itemType === "free_time",
-        manualLineTotalClient: it.itemType === "meal" || it.itemType === "free_time" ? 0 : null,
-      });
-    }
-  }
 
   const quote = await prisma.$transaction(async (tx) => {
     const q = await tx.quote.create({
@@ -196,20 +177,63 @@ export async function createQuoteAction(_prev: ActionState, formData: FormData):
       },
     });
 
-    if (itemsData.length > 0) {
-      await tx.quoteItem.createMany({
-        data: itemsData.map((row) => ({
-          ...row,
-          quoteId: q.id,
-        })),
-      });
+    const hasItems = template.days.some((d) => d.items.length > 0);
+    if (hasItems) {
+      for (const day of template.days) {
+        const dd = await tx.quoteDayDetail.create({
+          data: {
+            quoteId: q.id,
+            dayNumber: day.dayNumber,
+            destinationId: day.destinationId,
+            sortOrder: day.dayNumber - 1,
+          },
+        });
+        for (const it of day.items) {
+          const desc =
+            it.itemType === "meal" || it.itemType === "free_time"
+              ? it.itemType === "meal"
+                ? "Meal"
+                : "Free time"
+              : "";
+          await tx.quoteItem.create({
+            data: {
+              quoteId: q.id,
+              quoteDayDetailId: dd.id,
+              dayNumber: day.dayNumber,
+              sortOrder: it.sortOrder,
+              destinationId: day.destinationId,
+              itemType: it.itemType,
+              accommodationId: it.accommodationId,
+              experienceId: it.experienceId,
+              transportId: it.transportId,
+              timeSlot: it.timeSlot,
+              startTime: it.startTime,
+              notes: it.notes ?? Prisma.JsonNull,
+              isOptional: it.isOptional,
+              description: desc,
+              quantity: 1,
+              isManualPricing: it.itemType === "meal" || it.itemType === "free_time",
+              manualLineTotalClient: it.itemType === "meal" || it.itemType === "free_time" ? 0 : null,
+            },
+          });
+        }
+      }
     } else {
       const firstDay = template.days[0];
       const destId = firstDay?.destinationId ?? (await tx.destination.findFirst())?.id;
       if (destId) {
+        const dd = await tx.quoteDayDetail.create({
+          data: {
+            quoteId: q.id,
+            dayNumber: 1,
+            destinationId: destId,
+            sortOrder: 0,
+          },
+        });
         await tx.quoteItem.create({
           data: {
             quoteId: q.id,
+            quoteDayDetailId: dd.id,
             dayNumber: 1,
             sortOrder: 0,
             destinationId: destId,
@@ -238,53 +262,72 @@ export async function saveQuoteDraftAction(quoteId: string, json: unknown): Prom
   }
   const p = parsed.data;
 
-  await prisma.quote.update({
-    where: { id: quoteId },
-    data: {
-      name: p.name,
-      marginPct: p.marginPct,
-      currency: p.currency,
-      validUntil: p.validUntil ? new Date(p.validUntil) : null,
-      travelStartDate: p.travelStartDate ? new Date(p.travelStartDate) : null,
-      travelEndDate: p.travelEndDate ? new Date(p.travelEndDate) : null,
-      durationDays: p.durationDays,
-      numTravelers: p.numTravelers,
-      travelerType: p.travelerType ?? undefined,
-      tier: p.tier ?? undefined,
-      included: p.included === null ? Prisma.JsonNull : (p.included as Prisma.InputJsonValue),
-      notIncluded: p.notIncluded === null ? Prisma.JsonNull : (p.notIncluded as Prisma.InputJsonValue),
-    },
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.quoteItem.deleteMany({ where: { quoteId } });
+    await tx.quoteDayDetail.deleteMany({ where: { quoteId } });
 
-  await prisma.quoteItem.deleteMany({ where: { quoteId } });
+    await tx.quote.update({
+      where: { id: quoteId },
+      data: {
+        name: p.name,
+        marginPct: p.marginPct,
+        currency: p.currency,
+        validUntil: p.validUntil ? new Date(p.validUntil) : null,
+        travelStartDate: p.travelStartDate ? new Date(p.travelStartDate) : null,
+        travelEndDate: p.travelEndDate ? new Date(p.travelEndDate) : null,
+        durationDays: p.durationDays,
+        numTravelers: p.numTravelers,
+        travelerType: p.travelerType ?? undefined,
+        tier: p.tier ?? undefined,
+        included: p.included === null ? Prisma.JsonNull : (p.included as Prisma.InputJsonValue),
+        notIncluded: p.notIncluded === null ? Prisma.JsonNull : (p.notIncluded as Prisma.InputJsonValue),
+      },
+    });
 
-  const rows: Prisma.QuoteItemCreateManyInput[] = [];
-  for (const day of p.days) {
-    for (const it of day.items) {
-      rows.push({
-        quoteId,
-        dayNumber: day.dayNumber,
-        sortOrder: it.sortOrder,
-        destinationId: day.destinationId,
-        itemType: it.itemType,
-        accommodationId: it.accommodationId,
-        experienceId: it.experienceId,
-        transportId: it.transportId,
-        timeSlot: it.timeSlot,
-        startTime: it.startTime,
-        notes: notesJson(it.notesText),
-        isOptional: it.isOptional,
-        description: it.description,
-        isManualPricing: it.isManualPricing,
-        manualLineTotalClient: it.manualLineTotalClient,
-        quantity: 1,
+    for (let idx = 0; idx < p.days.length; idx++) {
+      const day = p.days[idx];
+      const dayNum = idx + 1;
+      const dd = await tx.quoteDayDetail.create({
+        data: {
+          quoteId,
+          dayNumber: dayNum,
+          destinationId: day.destinationId,
+          title: day.title?.trim() || null,
+          clientDescription: day.clientDescription?.trim() || null,
+          agentNotes: day.agentNotes?.trim() || null,
+          tags: day.tags,
+          transportEntries:
+            day.transportEntries.length > 0
+              ? (JSON.parse(JSON.stringify(day.transportEntries)) as Prisma.InputJsonValue)
+              : Prisma.JsonNull,
+          sortOrder: day.sortOrder ?? idx,
+        },
       });
+      for (const it of day.items) {
+        await tx.quoteItem.create({
+          data: {
+            quoteId,
+            quoteDayDetailId: dd.id,
+            dayNumber: dayNum,
+            sortOrder: it.sortOrder,
+            destinationId: day.destinationId,
+            itemType: it.itemType,
+            accommodationId: it.accommodationId,
+            experienceId: it.experienceId,
+            transportId: it.transportId,
+            timeSlot: it.timeSlot,
+            startTime: it.startTime,
+            notes: notesJson(it.notesText),
+            isOptional: it.isOptional,
+            description: it.description,
+            isManualPricing: it.isManualPricing,
+            manualLineTotalClient: it.manualLineTotalClient,
+            quantity: 1,
+          },
+        });
+      }
     }
-  }
-
-  if (rows.length > 0) {
-    await prisma.quoteItem.createMany({ data: rows });
-  }
+  });
 
   await recalculateQuoteTotals(quoteId);
   revalidatePath(`/admin/quotes/${quoteId}`);
@@ -476,7 +519,10 @@ export async function markQuoteRejectedAction(quoteId: string, reason: string): 
 export async function cloneQuoteAction(quoteId: string): Promise<ActionState> {
   const q = await prisma.quote.findUnique({
     where: { id: quoteId },
-    include: { items: true },
+    include: {
+      items: { orderBy: [{ dayNumber: "asc" }, { sortOrder: "asc" }] },
+      dayDetails: { orderBy: { dayNumber: "asc" } },
+    },
   });
   if (!q) return { ok: false, message: "Quote not found." };
   const userId = await ensureQuoteUser();
@@ -504,10 +550,51 @@ export async function cloneQuoteAction(quoteId: string): Promise<ActionState> {
         customizations: q.customizations ?? Prisma.JsonNull,
       },
     });
-    if (q.items.length > 0) {
-      await tx.quoteItem.createMany({
-        data: q.items.map((it) => ({
+
+    const detailIdMap = new Map<string, string>();
+
+    if (q.dayDetails.length > 0) {
+      for (const dd of q.dayDetails) {
+        const n = await tx.quoteDayDetail.create({
+          data: {
+            quoteId: created.id,
+            dayNumber: dd.dayNumber,
+            destinationId: dd.destinationId,
+            title: dd.title,
+            clientDescription: dd.clientDescription,
+            agentNotes: dd.agentNotes,
+            tags: dd.tags,
+            transportEntries: dd.transportEntries ?? Prisma.JsonNull,
+            sortOrder: dd.sortOrder,
+          },
+        });
+        detailIdMap.set(dd.id, n.id);
+      }
+    } else {
+      const dayNums = [...new Set(q.items.map((i) => i.dayNumber))].sort((a, b) => a - b);
+      for (const d of dayNums) {
+        const destId = q.items.find((i) => i.dayNumber === d)?.destinationId;
+        if (!destId) continue;
+        const n = await tx.quoteDayDetail.create({
+          data: {
+            quoteId: created.id,
+            dayNumber: d,
+            destinationId: destId,
+            sortOrder: dayNums.indexOf(d),
+          },
+        });
+        detailIdMap.set(`legacy:${d}`, n.id);
+      }
+    }
+
+    for (const it of q.items) {
+      const newDetailId = it.quoteDayDetailId
+        ? detailIdMap.get(it.quoteDayDetailId)
+        : detailIdMap.get(`legacy:${it.dayNumber}`);
+      await tx.quoteItem.create({
+        data: {
           quoteId: created.id,
+          quoteDayDetailId: newDetailId ?? null,
           dayNumber: it.dayNumber,
           sortOrder: it.sortOrder,
           destinationId: it.destinationId,
@@ -526,7 +613,7 @@ export async function cloneQuoteAction(quoteId: string): Promise<ActionState> {
           subtotalNetCop: it.subtotalNetCop,
           manualLineTotalClient: it.manualLineTotalClient,
           isManualPricing: it.isManualPricing,
-        })),
+        },
       });
     }
     return created;
@@ -614,6 +701,23 @@ export async function convertQuoteToBookingAction(quoteId: string): Promise<Acti
   redirect(`/admin/bookings/${booking.id}`);
 }
 
+function tagsFromAiProposal(tags: string[]): string[] {
+  return [...new Set(tags.map((t) => t.trim().toLowerCase().replace(/[\s/]+/g, "_")).filter(Boolean))];
+}
+
+function transportEntriesJson(
+  entries: { type: string; route?: string; duration?: string; tip?: string | null; notes?: string | null }[],
+): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  if (!entries?.length) return Prisma.JsonNull;
+  return entries.map((e) => ({
+    type: e.type,
+    route: e.route ?? "",
+    duration: e.duration ?? "",
+    tip: e.tip ?? "",
+    notes: e.notes ?? "",
+  })) as unknown as Prisma.InputJsonValue;
+}
+
 export async function createQuoteFromAiProposalAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const clientId = String(formData.get("clientId") ?? "");
   const proposalJson = String(formData.get("proposalJson") ?? "");
@@ -655,6 +759,7 @@ export async function createQuoteFromAiProposalAction(_prev: ActionState, formDa
   const name = parsedProposal.proposal_name.slice(0, 240);
   const tier = parsedProposal.tier;
 
+  const priceLine = formatAiEstimatedPriceRange(parsedProposal.estimated_price_range);
   const notesText = [
     `AI proposal — ${parsedProposal.proposal_name}`,
     parsedProposal.tagline,
@@ -667,7 +772,7 @@ export async function createQuoteFromAiProposalAction(_prev: ActionState, formDa
     "",
     parsedProposal.differentiator,
     "",
-    `Price range (EUR pp): ${parsedProposal.estimated_price_range.low_eur_pp} – ${parsedProposal.estimated_price_range.high_eur_pp}`,
+    `Fourchette indicative : ${priceLine}`,
     "",
     `--- JSON ---`,
     proposalJson,
@@ -685,94 +790,81 @@ export async function createQuoteFromAiProposalAction(_prev: ActionState, formDa
   });
   if (!destinationFallback) return { ok: false, message: "No destination in database — add one first." };
 
-  function itemTypeFromDay(dayTitle: string, narrative: string): "transport" | "experience" {
-    const text = `${dayTitle} ${narrative}`.toLowerCase();
-    if (
-      /vol|flight|aeroport|airport|transfert|transfer|route vers|trajet|commute|depart|retour|ferry|boat|bus|train/.test(text)
-    ) {
-      return "transport";
-    }
-    return "experience";
-  }
+  const aiByDay = new Map(parsedProposal.days.map((d) => [d.day_number, d]));
 
-  function logisticsNotes(dayTitle: string, area: string, narrative: string): string {
-    const lines: string[] = [];
-    lines.push(`Day theme: ${dayTitle}`);
-    lines.push(`Area: ${area}`);
-    const n = narrative.trim();
-    if (/anniversaire|birthday/.test(n.toLowerCase())) lines.push("Special attention: birthday celebration requested.");
-    if (/vol|flight|aeroport|airport/.test(n.toLowerCase())) lines.push("Logistics: airport transfer / flight coordination required.");
-    if (/route|trajet|transfer|transfert|commute/.test(n.toLowerCase()))
-      lines.push("Logistics: commuting segment, confirm pick-up and timing.");
-    return lines.join("\n");
+  async function finish(quoteId: string) {
+    await recalculateQuoteTotals(quoteId);
+    if (proposalId) await markAiProposalUsedForQuoteAction({ proposalId, quoteId });
+    revalidatePath("/admin/quotes");
+    revalidatePath(`/admin/clients/${clientId}`);
+    redirect(`/admin/quotes/${quoteId}`);
   }
-
-  const glanceByDay = new Map(parsedProposal.itinerary_at_a_glance.map((row) => [row.day_number, row]));
-  const generatedRows: Prisma.QuoteItemCreateManyInput[] = parsedProposal.days_program.map((day, idx) => {
-    const glance = glanceByDay.get(day.day_number);
-    const itemType = itemTypeFromDay(day.title, day.narrative);
-    const desc = `${day.title} — ${glance?.area ?? "Colombia"}`;
-    const notes = logisticsNotes(day.title, glance?.area ?? "Colombia", day.narrative);
-    return {
-      quoteId: "",
-      dayNumber: day.day_number,
-      sortOrder: idx,
-      destinationId: destinationFallback.id,
-      itemType,
-      description: desc.slice(0, 500),
-      notes: notesJson(`${notes}\n\nProgramme:\n${day.narrative}`),
-      quantity: 1,
-      isManualPricing: true,
-      manualLineTotalClient: 0,
-      isOptional: false,
-      timeSlot: null,
-      startTime: null,
-      accommodationId: null,
-      experienceId: null,
-      transportId: null,
-    };
-  });
 
   if (!templateId) {
-    const quote = await prisma.quote.create({
-      data: {
-        clientId,
-        createdById: userId,
-        name,
-        durationDays: targetDays,
-        numTravelers: 2,
-        travelerType: client.travelerType ?? undefined,
-        tier,
-        currency,
-        marginPct: 20,
-        travelStartDate: travelStart,
-        travelEndDate: travelEnd,
-        status: "draft",
-        notes: notesText,
-        customizations,
-        items: {
-          create: generatedRows.map((r) => ({
-            dayNumber: r.dayNumber,
-            sortOrder: r.sortOrder,
-            destinationId: r.destinationId,
-            itemType: r.itemType,
-            description: r.description,
-            notes: r.notes,
+    const quote = await prisma.$transaction(async (tx) => {
+      const q = await tx.quote.create({
+        data: {
+          clientId,
+          createdById: userId,
+          name,
+          durationDays: targetDays,
+          numTravelers: 2,
+          travelerType: client.travelerType ?? undefined,
+          tier,
+          currency,
+          marginPct: 20,
+          travelStartDate: travelStart,
+          travelEndDate: travelEnd,
+          status: "draft",
+          notes: notesText,
+          customizations,
+        },
+      });
+      for (let d = 1; d <= targetDays; d++) {
+        const aiDay = aiByDay.get(d);
+        const dd = await tx.quoteDayDetail.create({
+          data: {
+            quoteId: q.id,
+            dayNumber: d,
+            destinationId: destinationFallback.id,
+            title: aiDay?.title ?? null,
+            clientDescription: aiDay?.description ?? null,
+            tags: aiDay ? tagsFromAiProposal(aiDay.tags) : [],
+            transportEntries: aiDay ? transportEntriesJson(aiDay.transport) : Prisma.JsonNull,
+            sortOrder: d - 1,
+          },
+        });
+        const narrative = aiDay?.description ?? aiDay?.title ?? "Journée";
+        const itemType: "transport" | "experience" =
+          /transfer|flight|vol|aeroport|airport|route|trajet/i.test(`${aiDay?.title ?? ""} ${aiDay?.description ?? ""}`)
+            ? "transport"
+            : "experience";
+        await tx.quoteItem.create({
+          data: {
+            quoteId: q.id,
+            quoteDayDetailId: dd.id,
+            dayNumber: d,
+            sortOrder: 0,
+            destinationId: destinationFallback.id,
+            itemType,
+            description: (aiDay?.title ?? `Day ${d}`).slice(0, 500),
+            notes: notesJson(narrative),
             quantity: 1,
             isManualPricing: true,
             manualLineTotalClient: 0,
             isOptional: false,
-          })),
-        },
-      },
+            timeSlot: null,
+            startTime: null,
+            accommodationId: null,
+            experienceId: null,
+            transportId: null,
+          },
+        });
+      }
+      return q;
     });
-    await recalculateQuoteTotals(quote.id);
-    if (proposalId) await markAiProposalUsedForQuoteAction({ proposalId, quoteId: quote.id });
-    revalidatePath("/admin/quotes");
-    revalidatePath(`/admin/clients/${clientId}`);
-    redirect(`/admin/quotes/${quote.id}`);
-  }
-
+    await finish(quote.id);
+  } else {
   const template = await prisma.tripTemplate.findUnique({
     where: { id: templateId },
     include: {
@@ -784,11 +876,7 @@ export async function createQuoteFromAiProposalAction(_prev: ActionState, formDa
   });
   if (!template) return { ok: false, message: "Template not found." };
 
-  const templateByDay = new Map(template.days.map((d) => [d.dayNumber, d.destinationId]));
-  const itemsData: Prisma.QuoteItemCreateManyInput[] = generatedRows.map((r) => ({
-    ...r,
-    destinationId: templateByDay.get(r.dayNumber) ?? r.destinationId,
-  }));
+  const templateDayMap = new Map(template.days.map((d) => [d.dayNumber, d]));
 
   const quote = await prisma.$transaction(async (tx) => {
     const q = await tx.quote.create({
@@ -813,27 +901,78 @@ export async function createQuoteFromAiProposalAction(_prev: ActionState, formDa
       },
     });
 
-    if (itemsData.length > 0) {
-      await tx.quoteItem.createMany({
-        data: itemsData.map((row) => ({
-          ...row,
+    for (let d = 1; d <= targetDays; d++) {
+      const td = templateDayMap.get(d);
+      const aiDay = aiByDay.get(d);
+      const destId = td?.destinationId ?? destinationFallback.id;
+      const dd = await tx.quoteDayDetail.create({
+        data: {
           quoteId: q.id,
-        })),
+          dayNumber: d,
+          destinationId: destId,
+          title: aiDay?.title ?? null,
+          clientDescription: aiDay?.description ?? null,
+          tags: aiDay ? tagsFromAiProposal(aiDay.tags) : [],
+          transportEntries: aiDay ? transportEntriesJson(aiDay.transport) : Prisma.JsonNull,
+          sortOrder: d - 1,
+        },
       });
-    } else {
-      const destId = template.days[0]?.destinationId ?? (await tx.destination.findFirst())?.id;
-      if (destId) {
+
+      if (td && td.items.length > 0) {
+        for (const it of td.items) {
+          const desc =
+            it.itemType === "meal" || it.itemType === "free_time"
+              ? it.itemType === "meal"
+                ? "Meal"
+                : "Free time"
+              : "";
+          await tx.quoteItem.create({
+            data: {
+              quoteId: q.id,
+              quoteDayDetailId: dd.id,
+              dayNumber: d,
+              sortOrder: it.sortOrder,
+              destinationId: td.destinationId,
+              itemType: it.itemType,
+              accommodationId: it.accommodationId,
+              experienceId: it.experienceId,
+              transportId: it.transportId,
+              timeSlot: it.timeSlot,
+              startTime: it.startTime,
+              notes: it.notes ?? Prisma.JsonNull,
+              isOptional: it.isOptional,
+              description: desc,
+              quantity: 1,
+              isManualPricing: it.itemType === "meal" || it.itemType === "free_time",
+              manualLineTotalClient: it.itemType === "meal" || it.itemType === "free_time" ? 0 : null,
+            },
+          });
+        }
+      } else {
+        const narrative = aiDay?.description ?? aiDay?.title ?? "Journée";
+        const itemType: "transport" | "experience" =
+          /transfer|flight|vol|aeroport|airport|route|trajet/i.test(`${aiDay?.title ?? ""} ${aiDay?.description ?? ""}`)
+            ? "transport"
+            : "experience";
         await tx.quoteItem.create({
           data: {
             quoteId: q.id,
-            dayNumber: 1,
+            quoteDayDetailId: dd.id,
+            dayNumber: d,
             sortOrder: 0,
             destinationId: destId,
-            itemType: "free_time",
-            description: "Free time",
+            itemType,
+            description: (aiDay?.title ?? `Day ${d}`).slice(0, 500),
+            notes: notesJson(narrative),
             quantity: 1,
             isManualPricing: true,
             manualLineTotalClient: 0,
+            isOptional: false,
+            timeSlot: null,
+            startTime: null,
+            accommodationId: null,
+            experienceId: null,
+            transportId: null,
           },
         });
       }
@@ -842,9 +981,106 @@ export async function createQuoteFromAiProposalAction(_prev: ActionState, formDa
     return q;
   });
 
+  await finish(quote.id);
+  }
+  return { ok: false, message: "Unexpected state." };
+}
+
+export async function patchQuoteDayDetailFieldsAction(input: {
+  quoteId: string;
+  dayNumber: number;
+  dayDetailId?: string | null;
+  title?: string;
+  clientDescription?: string;
+  agentNotes?: string;
+  tags?: string[];
+  transportEntries?: { type: string; route: string; duration: string; tip: string; notes: string }[];
+}): Promise<ActionState> {
+  const data: Prisma.QuoteDayDetailUpdateInput = {};
+  if (input.title !== undefined) data.title = input.title.trim() || null;
+  if (input.clientDescription !== undefined) data.clientDescription = input.clientDescription.trim() || null;
+  if (input.agentNotes !== undefined) data.agentNotes = input.agentNotes.trim() || null;
+  if (input.tags !== undefined) data.tags = input.tags;
+  if (input.transportEntries !== undefined) {
+    data.transportEntries =
+      input.transportEntries.length > 0
+        ? (JSON.parse(JSON.stringify(input.transportEntries)) as Prisma.InputJsonValue)
+        : Prisma.JsonNull;
+  }
+
+  if (input.dayDetailId) {
+    await prisma.quoteDayDetail.update({
+      where: { id: input.dayDetailId, quoteId: input.quoteId },
+      data,
+    });
+  } else {
+    await prisma.quoteDayDetail.update({
+      where: { quoteId_dayNumber: { quoteId: input.quoteId, dayNumber: input.dayNumber } },
+      data,
+    });
+  }
+  revalidatePath(`/admin/quotes/${input.quoteId}`);
+  return { ok: true };
+}
+
+export async function swapQuoteDayAccommodationAction(input: {
+  quoteId: string;
+  anchorDayNumber: number;
+  accommodationId: string;
+}): Promise<ActionState> {
+  const [quote, acc] = await Promise.all([
+    prisma.quote.findUnique({
+      where: { id: input.quoteId },
+      include: { items: { orderBy: [{ dayNumber: "asc" }, { sortOrder: "asc" }] } },
+    }),
+    prisma.accommodation.findUnique({
+      where: { id: input.accommodationId },
+      select: { id: true, destinationId: true },
+    }),
+  ]);
+  if (!quote || !acc) return { ok: false, message: "Not found." };
+
+  const byDay = new Map<number, (typeof quote.items)[number][]>();
+  for (const it of quote.items) {
+    if (!byDay.has(it.dayNumber)) byDay.set(it.dayNumber, []);
+    byDay.get(it.dayNumber)!.push(it);
+  }
+
+  const anchorItems = byDay.get(input.anchorDayNumber) ?? [];
+  const accItem = anchorItems.find((i) => i.itemType === "accommodation" && i.accommodationId);
+  const oldId = accItem?.accommodationId;
+  if (!oldId) return { ok: false, message: "Aucun hébergement ce jour à remplacer." };
+
+  let start = input.anchorDayNumber;
+  while (start > 1) {
+    const prev = byDay
+      .get(start - 1)
+      ?.find((i) => i.itemType === "accommodation" && i.accommodationId === oldId);
+    if (!prev) break;
+    start--;
+  }
+  let end = input.anchorDayNumber;
+  while (end < quote.durationDays) {
+    const next = byDay
+      .get(end + 1)
+      ?.find((i) => i.itemType === "accommodation" && i.accommodationId === oldId);
+    if (!next) break;
+    end++;
+  }
+
+  for (let d = start; d <= end; d++) {
+    const rows = byDay.get(d) ?? [];
+    for (const it of rows) {
+      if (it.itemType === "accommodation" && it.accommodationId === oldId) {
+        await prisma.quoteItem.update({
+          where: { id: it.id },
+          data: { accommodationId: acc.id, destinationId: acc.destinationId },
+        });
+      }
+    }
+  }
+
   await recalculateQuoteTotals(quote.id);
-  if (proposalId) await markAiProposalUsedForQuoteAction({ proposalId, quoteId: quote.id });
-  revalidatePath("/admin/quotes");
-  revalidatePath(`/admin/clients/${clientId}`);
-  redirect(`/admin/quotes/${quote.id}`);
+  revalidatePath(`/admin/quotes/${quote.id}`);
+  return { ok: true };
 }

@@ -10,7 +10,7 @@ export function buildProposalSystemPrompt(params: {
 
   const jsonContract = `
 Respond ONLY with valid JSON, no markdown backticks or preamble.
-Each proposal must include rich structure suitable for a client-facing proposal document (presentation + per-day programme).
+Each proposal must include rich structure suitable for quote building (per-day tags, transport hints, and client-facing day copy).
 
 {
   "proposals": [
@@ -19,36 +19,42 @@ Each proposal must include rich structure suitable for a client-facing proposal 
       "tagline": "string — one-sentence hook",
       "recommended_template": "string — exact template name from the list, or \\"custom\\"",
       "recommended_template_id": "uuid | null",
-      "duration_days": number (must equal number of days in itinerary_at_a_glance and days_program),
+      "duration_days": number (must equal number of entries in \\"days\\"),
       "tier": "BUDGET" | "STANDARD" | "CHARME" | "LUXURY",
-      "presentation": "string — concise narrative (90-180 words), warm and specific, not a bullet list",
+      "presentation": "string — concise narrative (optional but encouraged, 90-180 words)",
       "why_this_fits": "string — 2-4 sentences tied to discovery + CRM context",
-      "itinerary_at_a_glance": [
-        { "day_number": 1, "title": "string — short day title", "area": "string — region or route focus" }
-      ],
-      "days_program": [
+      "differentiator": "string — vs the other options in this response",
+      "estimated_price_range": "string — e.g. \\"2 500 – 3 200 EUR / groupe\\" or \\"EUR per person range as text\\"",
+      "day_highlights": ["string", "..."],
+      "days": [
         {
           "day_number": 1,
-          "title": "string — same theme as glance row for that day",
-          "narrative": "string — detailed but concise day programme (morning/afternoon/evening + practical tips — about 80-180 words)",
-          "suggested_lodging": "string | null — one hotel/style line for that night if relevant, else null"
+          "title": "string — day title (e.g. Arrival in Bogotá)",
+          "description": "string — client-facing narrative for that day (for quote PDF / roadbook)",
+          "tags": ["snake_case tags — e.g. arrival, city_tour, cultural, trekking, transfer_day, free_day, nature, coffee"],
+          "transport": [
+            {
+              "type": "domestic_flight | airport_transfer | taxi_urban | medium_road | long_road | boat | horseback | walking | jeep_4x4 | cable_metro",
+              "route": "string — e.g. El Dorado → hotel",
+              "duration": "string — e.g. 45 min, 1h flight",
+              "tip": "string | null — traveler-facing tip (safe, practical)",
+              "notes": "string | null — agent-only; omit secrets and supplier-only intel"
+            }
+          ],
+          "accommodation": "string | null — descriptive lodging line (no fabricated contract claims)"
         }
-      ],
-      "day_highlights": ["string", "..."],
-      "lodging_highlights": [
-        { "name": "string", "location": "string", "summary": "string — why this property tier fits the client" }
-      ],
-      "estimated_price_range": { "low_eur_pp": number, "high_eur_pp": number },
-      "differentiator": "string — vs the other options in this response"
+      ]
     }
   ]
 }
 
 Rules:
-- For each proposal, itinerary_at_a_glance and days_program must each have exactly duration_days entries, with day_number running from 1 to duration_days with no gaps or duplicates.
-- day_highlights: 3-6 thematic bullets (pace, nature, culture…) — not a copy of itinerary lines.
-- lodging_highlights: 0-4 entries; use [] if not relevant. Do not invent real hotel contracts; describe style/tier only.
-- Keep the full JSON compact enough to avoid truncation. Prefer concise sentences over long paragraphs.
+- For each proposal, \\"days\\" must have exactly duration_days entries, with day_number running from 1 to duration_days with no gaps or duplicates.
+- For EACH day, \\"tags\\" must capture scanning labels (transfer vs activity vs free day, themes like coffee, nature, etc.).
+- For EACH day, \\"transport\\" may be empty, or contain multiple legs (flight + transfer + drive same day is normal). Use realistic \\"type\\" values from the list.
+- \\"presentation\\" is optional; if omitted use an empty string.
+- \\"day_highlights\\": 3–6 thematic bullets not copied verbatim from each day's title.
+- Keep JSON compact to avoid truncation. Concise sentences over long paragraphs.
 - Never output text before or after the JSON object.
 `.trim();
 

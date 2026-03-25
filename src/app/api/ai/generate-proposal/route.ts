@@ -4,7 +4,6 @@ import { formatBookingsForPrompt, formatQuotesForPrompt, formatTouchpointsForPro
 import { buildProposalSystemPrompt, preferredLanguageToLabel } from "@/lib/ai/proposal-system-prompt";
 import { aiProposalResponseSchema } from "@/lib/ai/proposal-response-schema";
 import { getAnthropicApiKey } from "@/lib/ai/env";
-import { logAiProposalGenerated } from "@/lib/log-touchpoint";
 import { prisma } from "@/lib/prisma";
 
 const MISSING_KEY_MESSAGE =
@@ -433,7 +432,7 @@ Output budget mode:
       {
         error: "Model response did not match the expected schema.",
         issues: validated.error.flatten(),
-        raw: text.slice(0, 4000),
+        raw: firstText.slice(0, 4000),
       },
       { status: 502 },
     );
@@ -443,16 +442,10 @@ Output budget mode:
     return NextResponse.json(
       {
         error: `Expected ${count} proposals, got ${validated.data.proposals.length}.`,
-        raw: text.slice(0, 2000),
+        raw: firstText.slice(0, 2000),
       },
       { status: 502 },
     );
-  }
-
-  try {
-    await logAiProposalGenerated(clientId, count);
-  } catch {
-    // non-fatal
   }
 
   return NextResponse.json(validated.data);

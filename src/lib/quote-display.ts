@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, TripTier } from "@prisma/client";
 import { clientAmountToCop, copToClientAmount } from "@/lib/exchange-rates";
 
 export type QuoteItemWithRelations = {
@@ -21,7 +21,7 @@ export type QuoteItemWithRelations = {
   subtotalNetCop: number | null;
   manualLineTotalClient: number | null;
   isManualPricing: boolean;
-  accommodation?: { name: string } | null;
+  accommodation?: { name: string; tier?: TripTier; stars?: number | null } | null;
   experience?: { name: string } | null;
   transport?: { id: string } | null;
 };

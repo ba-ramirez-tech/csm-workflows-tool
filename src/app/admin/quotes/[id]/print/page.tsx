@@ -20,12 +20,36 @@ function linesFromJson(value: Prisma.JsonValue | null): string[] {
     .filter(Boolean);
 }
 
+type TransportEntryClient = { type: string; route: string; duration: string; tip: string; notes: string };
+
+function transportEntriesForPrint(raw: Prisma.JsonValue | null): TransportEntryClient[] {
+  if (raw == null || !Array.isArray(raw)) return [];
+  const out: TransportEntryClient[] = [];
+  for (const el of raw) {
+    if (el === null || typeof el !== "object" || Array.isArray(el)) continue;
+    const e = el as Record<string, unknown>;
+    const row: TransportEntryClient = {
+      type: typeof e.type === "string" ? e.type : "",
+      route: typeof e.route === "string" ? e.route : "",
+      duration: typeof e.duration === "string" ? e.duration : "",
+      tip: typeof e.tip === "string" ? e.tip : "",
+      notes: typeof e.notes === "string" ? e.notes : "",
+    };
+    if (row.type || row.route || row.duration || row.notes) out.push(row);
+  }
+  return out;
+}
+
 export default async function QuotePrintPage({ params }: Props) {
   const { id } = await params;
   const quote = await prisma.quote.findUnique({
     where: { id },
     include: {
       client: true,
+      dayDetails: {
+        orderBy: [{ sortOrder: "asc" }, { dayNumber: "asc" }],
+        include: { destination: { select: { name: true } } },
+      },
       items: {
         orderBy: [{ dayNumber: "asc" }, { sortOrder: "asc" }],
         include: {
@@ -50,6 +74,8 @@ export default async function QuotePrintPage({ params }: Props) {
     if (!byDay.has(it.dayNumber)) byDay.set(it.dayNumber, []);
     byDay.get(it.dayNumber)!.push(it);
   }
+
+  const detailByDay = new Map(quote.dayDetails.map((d) => [d.dayNumber, d]));
 
   const totalCop = quote.totalPriceCop ?? 0;
   const totalClient = copToClientAmount(totalCop, quote.currency);
@@ -80,12 +106,42 @@ export default async function QuotePrintPage({ params }: Props) {
         <div className="mt-4 space-y-8">
           {Array.from({ length: quote.durationDays }, (_, i) => i + 1).map((dayNum) => {
             const items = byDay.get(dayNum) ?? [];
-            const destName = items[0]?.destination?.name ?? "—";
+            const detail = detailByDay.get(dayNum);
+            const destName = detail?.destination?.name ?? items[0]?.destination?.name ?? "—";
+            const dayTitle = detail?.title?.trim() || destName;
+            const tags = detail?.tags?.filter(Boolean) ?? [];
+            const clientDesc = detail?.clientDescription?.trim();
+            const transports = transportEntriesForPrint(detail?.transportEntries ?? null);
             return (
               <div key={dayNum} className="break-inside-avoid">
                 <h3 className="text-lg font-semibold text-teal-900">
-                  Day {dayNum} — {destName}
+                  Day {dayNum} — {dayTitle}
                 </h3>
+                <p className="mt-1 text-sm text-slate-600">{destName}</p>
+                {tags.length > 0 ? (
+                  <p className="mt-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    {tags.join(" · ")}
+                  </p>
+                ) : null}
+                {clientDesc ? (
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{clientDesc}</p>
+                ) : null}
+                {transports.length > 0 ? (
+                  <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-800">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Transport</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {transports.map((tr, ti) => (
+                        <li key={ti}>
+                          {tr.type ? <span className="font-medium capitalize">{tr.type.replace(/_/g, " ")}</span> : null}
+                          {tr.route ? <span>: {tr.route}</span> : null}
+                          {tr.duration ? <span className="text-slate-600"> · {tr.duration}</span> : null}
+                          {tr.tip ? <span className="block text-slate-600">{tr.tip}</span> : null}
+                          {tr.notes ? <span className="block text-slate-700">{tr.notes}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-800">
                   {items.length === 0 ? (
                     <li className="text-slate-500">Details on request.</li>

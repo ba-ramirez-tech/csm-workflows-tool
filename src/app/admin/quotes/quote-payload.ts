@@ -12,6 +12,14 @@ const nullableIso = z
     return Number.isNaN(d.getTime()) ? null : s;
   });
 
+export const quoteTransportEntrySchema = z.object({
+  type: z.string().min(1),
+  route: z.string().default(""),
+  duration: z.string().default(""),
+  tip: z.string().default(""),
+  notes: z.string().default(""),
+});
+
 export const quoteEditorItemSchema = z.object({
   clientKey: z.string().min(1),
   sortOrder: z.number().int().min(0),
@@ -29,8 +37,16 @@ export const quoteEditorItemSchema = z.object({
 });
 
 export const quoteEditorDaySchema = z.object({
+  rowKey: z.string().min(1),
+  dayDetailId: z.string().uuid().nullable().optional(),
   dayNumber: z.number().int().min(1),
   destinationId: z.string().uuid(),
+  title: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  clientDescription: z.string().default(""),
+  agentNotes: z.string().default(""),
+  transportEntries: z.array(quoteTransportEntrySchema).default([]),
+  sortOrder: z.number().int().min(0).optional(),
   items: z.array(quoteEditorItemSchema),
 });
 

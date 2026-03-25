@@ -206,6 +206,7 @@ model Destination {
   templateDays       TemplateDay[]
   bookingStages      BookingStage[]
   quoteItems         QuoteItem[]
+  quoteDayDetails    QuoteDayDetail[]
 
   @@map("destinations")
 }
@@ -544,27 +545,50 @@ model AiProposalDraft {
 }
 
 model AiProposal {
-  id            String   @id @default(uuid())
-  clientId      String
-  briefDraft    String?
-  generatedJson Json
-  editedJson    Json?
-  status        String   @default("draft") // draft, accepted, rejected, used_for_quote
-  createdById   String?
-  createdBy     String?
-  updatedById   String?
-  updatedBy     String?
-  acceptedAt    DateTime?
-  rejectedAt    DateTime?
-  usedForQuoteAt DateTime?
-  quoteId       String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                  String   @id @default(uuid())
+  clientId            String
+  quoteId             String?  @unique
+  proposalName        String
+  tagline             String?
+  recommendedTemplate String?
+  durationDays        Int?
+  tier                String?
+  whyThisFits         String?
+  dayHighlights       Json?
+  estimatedPriceRange String?
+  differentiator      String?
+  fullResponse        Json?
+  agentFocusNote      String?
+  status              String   @default("generated") // generated, selected, converted, dismissed
+  createdAt           DateTime @default(now())
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  quote  Quote? @relation(fields: [quoteId], references: [id], onDelete: SetNull)
 
   @@index([clientId, createdAt])
   @@map("ai_proposals")
+}
+
+model QuoteDayDetail {
+  id                String   @id @default(uuid())
+  quoteId           String
+  dayNumber         Int
+  destinationId     String?
+  title             String?
+  clientDescription String?
+  agentNotes        String?
+  tags              String[] @default([])
+  transportEntries  Json?
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  quote         Quote         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  destination   Destination?  @relation(fields: [destinationId], references: [id])
+  items         QuoteItem[]
+
+  @@unique([quoteId, dayNumber])
+  @@map("quote_day_details")
 }
 
 model ClientOperationalDetails {
@@ -808,6 +832,8 @@ model Quote {
   createdBy       User         @relation("QuoteCreator", fields: [createdById], references: [id])
   booking         Booking?
   items           QuoteItem[]
+  dayDetails      QuoteDayDetail[]
+  aiProposal      AiProposal?
   quotationDocument ClientDocument? @relation("QuoteClientDocument")
 
   @@map("quotes")
@@ -816,6 +842,7 @@ model Quote {
 model QuoteItem {
   id           String   @id @default(uuid())
   quoteId      String
+  quoteDayDetailId String?
   dayNumber    Int
   sortOrder    Int      @default(0)
   destinationId String
@@ -840,6 +867,7 @@ model QuoteItem {
   isManualPricing Boolean @default(false)
 
   quote        Quote         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  quoteDayDetail QuoteDayDetail? @relation(fields: [quoteDayDetailId], references: [id], onDelete: SetNull)
   destination  Destination   @relation(fields: [destinationId], references: [id])
   accommodation Accommodation? @relation("QuoteItemAccommodation", fields: [accommodationId], references: [id])
   experience    Experience?    @relation("QuoteItemExperience", fields: [experienceId], references: [id])

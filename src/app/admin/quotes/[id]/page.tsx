@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { parseIntakeFull } from "@/lib/admin/discovery-intake-fields";
 import { formatJsonIncludedAsLines, notesToText, type QuoteItemWithRelations } from "@/lib/quote-display";
 import { prisma } from "@/lib/prisma";
+import type { AccommodationPick } from "../quote-editor-days-section";
 import type { QuoteDayState, QuoteItemState } from "../quote-editor-client";
 import { QuoteEditorClient } from "../quote-editor-client";
 
@@ -11,16 +13,22 @@ export const dynamic = "force-dynamic";
 
 type Props = { params: Promise<{ id: string }> };
 
-function jsonToText(value: Prisma.JsonValue | null): string {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const o = value as Record<string, unknown>;
-    for (const lang of ["fr", "en", "es", "de"]) {
-      const v = o[lang];
-      if (typeof v === "string") return v;
-    }
+function parseTransportEntries(value: Prisma.JsonValue | null): QuoteDayState["transportEntries"] {
+  if (value == null || !Array.isArray(value)) return [];
+  const out: QuoteDayState["transportEntries"] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const o = row as Record<string, unknown>;
+    const type = typeof o.type === "string" ? o.type : "airport_transfer";
+    out.push({
+      type,
+      route: typeof o.route === "string" ? o.route : "",
+      duration: typeof o.duration === "string" ? o.duration : "",
+      tip: typeof o.tip === "string" ? o.tip : "",
+      notes: typeof o.notes === "string" ? o.notes : "",
+    });
   }
-  return "";
+  return out;
 }
 
 function mapDbItemToState(it: {
@@ -63,11 +71,13 @@ export default async function QuoteEditorPage({ params }: Props) {
     include: {
       client: true,
       template: { select: { id: true, name: true } },
+      aiProposal: { select: { proposalName: true } },
+      dayDetails: { orderBy: { dayNumber: "asc" } },
       items: {
         orderBy: [{ dayNumber: "asc" }, { sortOrder: "asc" }],
         include: {
           destination: { select: { id: true, name: true } },
-          accommodation: { select: { id: true, name: true } },
+          accommodation: { select: { id: true, name: true, tier: true, stars: true } },
           experience: { select: { id: true, name: true } },
           transport: {
             select: {
@@ -82,7 +92,7 @@ export default async function QuoteEditorPage({ params }: Props) {
   });
   if (!quote) notFound();
 
-  const [intake, destinations, accommodations, experiences, transportRoutes] = await Promise.all([
+  const [intake, destinations, accommodationsPick, experiences, transportRoutes] = await Promise.all([
     prisma.intakeResponse.findFirst({
       where: { clientId: quote.clientId },
       orderBy: { submittedAt: "desc" },
@@ -93,8 +103,25 @@ export default async function QuoteEditorPage({ params }: Props) {
       select: { id: true, name: true },
     }),
     prisma.accommodation.findMany({
-      select: { id: true, name: true, destinationId: true },
+      where: { isActive: true },
       orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        destinationId: true,
+        tier: true,
+        stars: true,
+        address: true,
+        checkInTime: true,
+        checkOutTime: true,
+        roomTypes: true,
+        contracts: {
+          where: { isActive: true },
+          orderBy: { validTo: "desc" },
+          take: 1,
+          select: { netCostCop: true, costPerWhat: true },
+        },
+      },
     }),
     prisma.experience.findMany({
       select: { id: true, name: true, destinationId: true },
@@ -109,8 +136,22 @@ export default async function QuoteEditorPage({ params }: Props) {
     }),
   ]);
 
+  const accommodationPicker: AccommodationPick[] = accommodationsPick.map((a) => ({
+    id: a.id,
+    name: a.name,
+    destinationId: a.destinationId,
+    tier: a.tier,
+    stars: a.stars,
+    address: a.address,
+    checkInTime: a.checkInTime,
+    checkOutTime: a.checkOutTime,
+    roomTypes: a.roomTypes,
+    netCop: a.contracts[0]?.netCostCop ?? null,
+    costPerWhat: a.contracts[0]?.costPerWhat ?? null,
+  }));
+
   const accommodationsByDest: Record<string, { id: string; name: string }[]> = {};
-  for (const a of accommodations) {
+  for (const a of accommodationsPick) {
     (accommodationsByDest[a.destinationId] ??= []).push({ id: a.id, name: a.name });
   }
 
@@ -137,14 +178,25 @@ export default async function QuoteEditorPage({ params }: Props) {
     byDay.get(it.dayNumber)!.push(it);
   }
 
+  const detailsByDay = new Map(quote.dayDetails.map((d) => [d.dayNumber, d]));
   const defaultDest = destinations[0]?.id ?? "";
+
   const initialDays: QuoteDayState[] = [];
   for (let d = 1; d <= quote.durationDays; d++) {
+    const det = detailsByDay.get(d);
     const list = byDay.get(d) ?? [];
-    const destId = list[0]?.destinationId ?? quote.items.find((x) => x.dayNumber === d)?.destinationId ?? defaultDest;
+    const destId =
+      det?.destinationId ?? list[0]?.destinationId ?? quote.items.find((x) => x.dayNumber === d)?.destinationId ?? defaultDest;
     initialDays.push({
+      rowKey: det?.id ?? randomUUID(),
+      dayDetailId: det?.id ?? null,
       dayNumber: d,
       destinationId: destId || defaultDest,
+      title: det?.title ?? "",
+      tags: det?.tags ?? [],
+      clientDescription: det?.clientDescription ?? "",
+      agentNotes: det?.agentNotes ?? "",
+      transportEntries: parseTransportEntries(det?.transportEntries ?? null),
       items: list.map(mapDbItemToState),
     });
   }
@@ -179,9 +231,7 @@ export default async function QuoteEditorPage({ params }: Props) {
     isManualPricing: it.isManualPricing,
     accommodation: it.accommodation,
     experience: it.experience,
-    transport: it.transport
-      ? { id: it.transport.id }
-      : null,
+    transport: it.transport ? { id: it.transport.id } : null,
   }));
 
   return (
@@ -226,6 +276,8 @@ export default async function QuoteEditorPage({ params }: Props) {
         experiencesByDest={experiencesByDest}
         transports={transports}
         transportLabels={transportLabels}
+        accommodationPicker={accommodationPicker}
+        linkedAiProposal={quote.aiProposal}
       />
     </div>
   );
